@@ -1,0 +1,49 @@
+package com.github.klboke.nexusplus.server.migration;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.github.klboke.nexusplus.core.RepositoryFormat;
+import com.github.klboke.nexusplus.protocol.maven.path.MavenPathParser;
+import org.junit.jupiter.api.Test;
+
+class RepositoryDataMigrationPathsTest {
+  private static final MavenPathParser MAVEN_PATH_PARSER = new MavenPathParser();
+
+  @Test
+  void discoverySkipsOnlyMavenChecksumSidecars() {
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.MAVEN2, "com/acme/app/1.0/app-1.0.jar.md5"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.MAVEN2, "com/acme/app/1.0/app-1.0.jar.sha1"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.MAVEN2, "com/acme/app/1.0/app-1.0.jar.sha256"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.MAVEN2, "com/acme/app/1.0/app-1.0.jar.sha512"));
+
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.MAVEN2, "com/acme/app/1.0/app-1.0.jar"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.MAVEN2, "com/acme/app/maven-metadata.xml"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.NPM, "left-pad/-/left-pad-1.0.0.tgz.sha1"));
+  }
+
+  @Test
+  void checksumGenerationRunsForMavenNonChecksumContent() {
+    assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
+        MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar")));
+    assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
+        MAVEN_PATH_PARSER.parsePath("com/acme/app/maven-metadata.xml")));
+
+    assertFalse(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
+        MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar.sha1")));
+    assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
+        MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar.asc")));
+  }
+
+  @Test
+  void checksumSuffixMatchIsCaseInsensitive() {
+    assertTrue(RepositoryDataMigrationPaths.isMavenChecksumPath("a/b/c.JAR.SHA512"));
+  }
+}

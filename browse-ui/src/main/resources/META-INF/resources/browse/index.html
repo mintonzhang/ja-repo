@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>nexus-plus browse</title>
+    <link rel="icon" type="image/svg+xml" href="/browse/assets/favicon.svg?v=20260609-kl-logo-1">
+    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260609-user-menu-1">
+    <link rel="stylesheet" href="/login/assets/login-modal.css?v=20260527-active-button-1">
+  </head>
+  <body>
+    <div class="nx-shell">
+      <header class="nx-topbar">
+        <div class="product">
+          <div class="logo-mark" aria-hidden="true">KL</div>
+          <div class="product-copy">
+            <div class="product-name">nexus-plus<br>Repository Manager</div>
+          </div>
+        </div>
+        <nav class="workspace-tabs" aria-label="Workspace">
+          <a class="workspace-tab is-active" href="/browse/#browse/welcome" aria-current="page">Browse</a>
+          <a class="workspace-tab" id="admin-workspace-link" href="/admin/#admin/repository/repositories" hidden>Admin</a>
+        </nav>
+        <div class="top-spacer"></div>
+        <button class="signout" id="login-button" type="button">Sign in</button>
+        <div class="user-menu" id="user-menu" hidden>
+          <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="user-pill" id="current-user" title="Current user"></span>
+            <span class="user-menu-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="user-menu-popover" id="user-menu-popover" role="menu" aria-hidden="true">
+            <button class="user-menu-item" id="my-token-menu-item" type="button" role="menuitem">My Token</button>
+            <button class="user-menu-item" id="signout-button" type="button" role="menuitem">Sign out</button>
+          </div>
+        </div>
+      </header>
+
+      <aside class="nx-sidebar">
+        <nav class="side-nav" aria-label="Browse navigation">
+          <button class="side-item is-active" data-view="welcome" type="button">
+            <span class="side-icon">⌂</span>
+            <span>Welcome</span>
+          </button>
+          <button class="side-item" data-view="search" type="button" aria-expanded="false" aria-controls="search-subnav">
+            <span class="side-icon">⌕</span>
+            <span>Search</span>
+            <span class="side-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="search-subnav" id="search-subnav" hidden>
+            <button class="side-subitem" data-search-format="go" type="button">Go</button>
+            <button class="side-subitem" data-search-format="helm" type="button">Helm</button>
+            <button class="side-subitem" data-search-format="maven2" type="button">Maven</button>
+            <button class="side-subitem" data-search-format="nuget" type="button">NuGet</button>
+            <button class="side-subitem" data-search-format="pypi" type="button">PyPI</button>
+            <button class="side-subitem" data-search-format="rubygems" type="button">RubyGems</button>
+            <button class="side-subitem" data-search-format="yum" type="button">Yum</button>
+            <button class="side-subitem" data-search-format="npm" type="button">npm</button>
+          </div>
+          <button class="side-item" data-view="browse" type="button">
+            <span class="side-icon">▣</span>
+            <span>Browse</span>
+          </button>
+          <button class="side-item" id="upload-nav" data-view="upload" type="button" hidden>
+            <span class="side-icon">⇧</span>
+            <span>Upload</span>
+          </button>
+        </nav>
+      </aside>
+
+      <main class="nx-content">
+        <section class="view is-active" id="welcome-view">
+          <div class="page-heading">
+            <span class="heading-icon">⌂</span>
+            <h1>Welcome</h1>
+            <span class="heading-copy">Nexus-compatible repository access for internal packages</span>
+          </div>
+          <div class="welcome-panel">
+            <h2>Repository entrypoints</h2>
+            <p>Use the Browse, Search, and Upload areas with Nexus-compatible repository URLs.</p>
+          </div>
+          <form class="admin-bootstrap-panel" id="admin-bootstrap-panel" hidden novalidate>
+            <div class="admin-bootstrap-title">Initial administrator setup</div>
+            <div class="admin-bootstrap-grid">
+              <label>
+                <span>Administrator</span>
+                <input id="admin-bootstrap-user" type="text" value="Local/admin" disabled>
+              </label>
+              <label>
+                <span>Password</span>
+                <input id="admin-bootstrap-password" type="password" autocomplete="new-password">
+              </label>
+              <label>
+                <span>Confirm password</span>
+                <input id="admin-bootstrap-password-confirm" type="password" autocomplete="new-password">
+              </label>
+            </div>
+            <div class="admin-bootstrap-actions">
+              <button class="admin-bootstrap-button" id="admin-bootstrap-submit" type="submit">Create administrator</button>
+              <span class="admin-bootstrap-status" id="admin-bootstrap-status" role="status"></span>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="browse-view">
+          <div class="page-heading">
+            <span class="heading-icon">▣</span>
+            <h1>Browse</h1>
+            <span class="heading-copy">Browse assets and components</span>
+          </div>
+          <div class="table-tools">
+            <label class="filter-box">
+              <span class="filter-icon">▾</span>
+              <input id="repository-filter" type="search" placeholder="Filter">
+            </label>
+          </div>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead>
+                <tr>
+                  <th class="icon-column">↑</th>
+                  <th aria-sort="ascending">
+                    <button class="repo-sort-button is-active" data-repo-sort="name" type="button">
+                      <span>Name</span>
+                      <span class="repo-sort-indicator" aria-hidden="true">↑</span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repo-sort="type" type="button">
+                      <span>Type</span>
+                      <span class="repo-sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repo-sort="format" type="button">
+                      <span>Format</span>
+                      <span class="repo-sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th>Status</th>
+                  <th>URL</th>
+                  <th class="repo-copy-column">Copy</th>
+                </tr>
+              </thead>
+              <tbody id="repository-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="search-view">
+          <div class="page-heading">
+            <span class="heading-icon">⌕</span>
+            <h1>Search</h1>
+            <span class="heading-copy">Search for components by attribute</span>
+          </div>
+          <div class="search-form">
+            <label>
+              <span>Keyword</span>
+              <input id="component-keyword" type="search" placeholder="Any">
+            </label>
+            <button class="criteria-button" id="component-search-button" type="button">Search</button>
+          </div>
+          <div class="result-note">ⓘ Only showing the first 20 of <span id="component-total">0</span> results</div>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead>
+                <tr>
+                  <th class="icon-column"></th>
+                  <th>Name</th>
+                  <th>Group</th>
+                  <th>Version</th>
+                  <th>Format</th>
+                  <th>Repository</th>
+                  <th class="expand-column"></th>
+                </tr>
+              </thead>
+              <tbody id="component-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="upload-view">
+          <div class="page-heading">
+            <span class="heading-icon">⇧</span>
+            <h1>Upload</h1>
+            <span class="heading-copy">Upload content to the repository</span>
+          </div>
+          <div class="upload-layout">
+            <form class="upload-form" id="upload-form">
+              <label>
+                <span>Repository</span>
+                <select id="upload-repository" required></select>
+              </label>
+              <div class="upload-fields" id="upload-fields"></div>
+              <button class="upload-button" id="upload-submit" type="submit">Upload</button>
+              <div class="upload-status" id="upload-status" role="status"></div>
+            </form>
+          </div>
+        </section>
+
+        <section class="view" id="my-token-view">
+          <div class="page-heading">
+            <span class="heading-icon">T</span>
+            <h1>My Token</h1>
+            <span class="heading-copy">API keys for package clients</span>
+          </div>
+          <div class="token-layout">
+            <form class="token-panel token-form" id="my-token-form">
+              <label>
+                <span>Domain</span>
+                <select id="my-token-domain">
+                  <option value="NpmToken">NpmToken</option>
+                </select>
+              </label>
+              <label>
+                <span>Display name</span>
+                <input id="my-token-display-name" type="text" value="npm token" autocomplete="off">
+              </label>
+              <button class="upload-button" id="my-token-create" type="submit">Generate</button>
+              <div class="token-status" id="my-token-status" role="status"></div>
+            </form>
+
+            <div class="token-panel token-secret" id="my-token-secret" hidden>
+              <div class="token-secret-header">
+                <div>
+                  <div class="token-panel-title">Generated token</div>
+                  <div class="token-note">Shown once after generate or reset.</div>
+                </div>
+                <button class="secondary-button" id="my-token-copy" type="button">Copy</button>
+              </div>
+              <input class="token-value" id="my-token-value" type="text" readonly>
+            </div>
+
+            <div class="token-panel">
+              <div class="token-panel-title">Current API keys</div>
+              <div class="nx-table-frame token-table-frame">
+                <table class="nx-table token-table">
+                  <thead>
+                    <tr>
+                      <th>Domain</th>
+                      <th>Name</th>
+                      <th>Owner</th>
+                      <th>Status</th>
+                      <th>Prefix</th>
+                      <th>Scopes</th>
+                      <th>Updated</th>
+                      <th class="token-actions-column">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="my-token-table"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/login/assets/login-modal.js?v=20260522-login-modal-2"></script>
+    <script src="/browse/assets/browse.js?v=20260609-user-menu-1"></script>
+  </body>
+</html>

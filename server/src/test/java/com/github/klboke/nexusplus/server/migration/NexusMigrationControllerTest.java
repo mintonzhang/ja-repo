@@ -1,0 +1,408 @@
+package com.github.klboke.nexusplus.server.migration;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import com.github.klboke.nexusplus.auth.AccessDecision;
+import com.github.klboke.nexusplus.auth.PermissionSubject;
+import com.github.klboke.nexusplus.migration.nexus.NexusApiMigrationService;
+import com.github.klboke.nexusplus.migration.nexus.NexusApiMigrationService.ConfigMigrationCounts;
+import com.github.klboke.nexusplus.migration.nexus.NexusApiMigrationService.NexusMigrationPreflight;
+import com.github.klboke.nexusplus.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
+import com.github.klboke.nexusplus.migration.nexus.NexusApiMigrationService.NexusMigrationResult;
+import com.github.klboke.nexusplus.migration.nexus.NexusApiMigrationService.NexusMigrationTargetBlobStore;
+import com.github.klboke.nexusplus.migration.nexus.NexusApiMigrationService.NexusMigrationValidation;
+import com.github.klboke.nexusplus.persistence.mysql.dao.BlobStoreDao;
+import com.github.klboke.nexusplus.persistence.mysql.model.BlobStoreRecord;
+import com.github.klboke.nexusplus.server.catalog.CatalogCacheBroadcaster;
+import com.github.klboke.nexusplus.server.maven.BlobStorageRegistry;
+import com.github.klboke.nexusplus.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.nexusplus.server.repositories.RepositoryCatalogCache;
+import com.github.klboke.nexusplus.server.security.AuthenticatedSubject;
+import com.github.klboke.nexusplus.server.security.SecurityAuthorizationCache;
+import com.github.klboke.nexusplus.server.security.SecurityCatalogCache;
+import com.github.klboke.nexusplus.server.security.SecurityManagementService;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import org.springframework.beans.factory.ObjectProvider;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.bind.annotation.PathVariable;
+
+class NexusMigrationControllerTest {
+
+  @Test
+  void targetBlobStoreRequiresExistingDefaultBlobStore() {
+    NexusMigrationController controller = controllerWith(null);
+
+    IllegalArgumentException thrown = assertThrows(
+        IllegalArgumentException.class,
+        controller::targetBlobStore);
+
+    assertEquals("target blob store 'default' must exist before Nexus migration", thrown.getMessage());
+  }
+
+  @Test
+  void targetBlobStoreUsesExistingDefaultBlobStore() {
+    BlobStoreRecord defaultStore = new BlobStoreRecord(
+        7L,
+        "default",
+        "s3",
+        "http://s3.local",
+        "us-east-1",
+        "nexus-plus",
+        "target-prefix",
+        Map.of("engine", "s3", "pathStyleAccess", true));
+    NexusMigrationController controller = controllerWith(defaultStore);
+
+    NexusMigrationTargetBlobStore target = controller.targetBlobStore();
+
+    assertEquals("default", target.name());
+    assertEquals("s3", target.type());
+    assertEquals("http://s3.local", target.endpoint());
+    assertEquals("us-east-1", target.region());
+    assertEquals("nexus-plus", target.bucket());
+    assertEquals("target-prefix", target.prefix());
+    assertEquals("s3", target.attributes().get("engine"));
+    assertEquals("existing-target-default", target.attributes().get("source"));
+  }
+
+  @Test
+  void badRequestHandlerReturnsExplicitMessageBody() {
+    NexusMigrationController controller = controllerWith(null);
+
+    ResponseEntity<Map<String, Object>> response = controller.handleBadRequest(
+        new IllegalArgumentException("target blob store 'default' must exist before Nexus migration"));
+
+    assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    assertEquals(
+        "target blob store 'default' must exist before Nexus migration",
+        response.getBody().get("message"));
+  }
+
+  @Test
+  void sourceRequestFailureHandlerReturnsExplicitMessageBody() {
+    NexusMigrationController controller = controllerWith(null);
+
+    ResponseEntity<Map<String, Object>> response = controller.handleSourceRequestFailure(
+        new IOException("Nexus API /service/rest/v1/security/users?source=default timed out after 30s"));
+
+    assertEquals(HttpStatus.BAD_GATEWAY, response.getStatusCode());
+    assertEquals(
+        "Nexus API /service/rest/v1/security/users?source=default timed out after 30s",
+        response.getBody().get("message"));
+  }
+
+  @Test
+  void repositoryDataPathVariablesDeclareExplicitNames() {
+    assertEquals("jobId", pathVariableName("startRepositoryDataMetadataWorker"));
+    assertEquals("jobId", pathVariableName("startRepositoryDataPackageWorker"));
+    assertEquals("jobId", pathVariableName("retryFailedRepositoryDataPackages"));
+    assertEquals("jobId", pathVariableName("repositoryDataMigrationStatus"));
+  }
+
+  @Test
+  void runRequestIgnoresLegacyDryRunFlagWhenRealMigrationIsRequested() throws Exception {
+    NexusMigrationController controller = controllerWith(defaultBlobStore());
+    NexusMigrationController.NexusMigrationCommand command = new NexusMigrationController.NexusMigrationCommand(
+        "http://localhost:28090/",
+        "admin",
+        "secret",
+        null,
+        null,
+        "3.29.2-02",
+        true);
+
+    NexusMigrationRequest request = toRequest(controller, command, false);
+
+    assertEquals(false, request.dryRun());
+  }
+
+  @Test
+  void preflightRequestForcesDryRun() throws Exception {
+    NexusMigrationController controller = controllerWith(defaultBlobStore());
+    NexusMigrationController.NexusMigrationCommand command = new NexusMigrationController.NexusMigrationCommand(
+        "http://localhost:28090/",
+        "admin",
+        "secret",
+        null,
+        null,
+        "3.29.2-02",
+        false);
+
+    NexusMigrationRequest request = toRequest(controller, command, true);
+
+    assertEquals(true, request.dryRun());
+  }
+
+  @Test
+  void runRefreshesConfigCachesAfterMigrationWrites() throws Exception {
+    CountingMigrationService migrationService = new CountingMigrationService();
+    CountingRepositoryCatalogCache repositoryCatalogCache = new CountingRepositoryCatalogCache();
+    CountingRepositoryRuntimeRegistry runtimeRegistry = new CountingRepositoryRuntimeRegistry();
+    CountingBlobStorageRegistry blobStorageRegistry = new CountingBlobStorageRegistry();
+    CountingSecurityCatalogCache securityCatalogCache = new CountingSecurityCatalogCache();
+    CountingSecurityAuthorizationCache securityAuthorizationCache = new CountingSecurityAuthorizationCache();
+    NexusMigrationController controller = new TestableNexusMigrationController(
+        defaultBlobStore(),
+        migrationService,
+        repositoryCatalogCache,
+        runtimeRegistry,
+        blobStorageRegistry,
+        securityCatalogCache,
+        securityAuthorizationCache);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "POST",
+        "/internal/migration/nexus/run");
+    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, adminSubject());
+    NexusMigrationController.NexusMigrationCommand command = new NexusMigrationController.NexusMigrationCommand(
+        "http://localhost:28090/",
+        "admin",
+        "secret",
+        null,
+        null,
+        "3.29.2-02",
+        true);
+
+    NexusMigrationResult result = controller.run(command, request);
+
+    assertEquals("finished", result.status());
+    assertEquals(1, migrationService.migrations);
+    assertEquals(false, migrationService.request.dryRun());
+    assertEquals(1, blobStorageRegistry.refreshes);
+    assertEquals(1, repositoryCatalogCache.refreshes);
+    assertEquals(1, runtimeRegistry.invalidations);
+    assertEquals(1, securityCatalogCache.refreshes);
+    assertEquals(1, securityAuthorizationCache.invalidations);
+  }
+
+  private static NexusMigrationController controllerWith(BlobStoreRecord defaultStore) {
+    return new NexusMigrationController(
+        null,
+        new StubBlobStoreDao(defaultStore),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
+  }
+
+  private static String pathVariableName(String methodName) {
+    Method method = Arrays.stream(NexusMigrationController.class.getDeclaredMethods())
+        .filter(candidate -> candidate.getName().equals(methodName))
+        .findFirst()
+        .orElseThrow();
+    return Arrays.stream(method.getParameters())
+        .map(Parameter::getAnnotations)
+        .flatMap(Arrays::stream)
+        .filter(PathVariable.class::isInstance)
+        .map(PathVariable.class::cast)
+        .findFirst()
+        .map(PathVariable::value)
+        .orElse("");
+  }
+
+  private static NexusMigrationRequest toRequest(
+      NexusMigrationController controller,
+      NexusMigrationController.NexusMigrationCommand command,
+      boolean dryRun) throws Exception {
+    Method method = NexusMigrationController.class.getDeclaredMethod(
+        "toRequest",
+        NexusMigrationController.NexusMigrationCommand.class,
+        boolean.class);
+    method.setAccessible(true);
+    return (NexusMigrationRequest) method.invoke(controller, command, dryRun);
+  }
+
+  private static BlobStoreRecord defaultBlobStore() {
+    return new BlobStoreRecord(
+        7L,
+        "default",
+        "s3",
+        "http://s3.local",
+        "us-east-1",
+        "nexus-plus",
+        "target-prefix",
+        Map.of("engine", "s3", "pathStyleAccess", true));
+  }
+
+  private static AuthenticatedSubject adminSubject() {
+    return new AuthenticatedSubject(
+        "Local",
+        "admin",
+        "local",
+        null,
+        new PermissionSubject("Local", "admin", Set.of("nx-admin"), null));
+  }
+
+  private static NexusMigrationResult successfulMigrationResult(NexusMigrationRequest request) {
+    return new NexusMigrationResult(
+        11L,
+        "finished",
+        request.dryRun(),
+        new NexusMigrationPreflight(0, 0, 0, 0, List.of(), List.of(), 0, List.of(), List.of()),
+        new ConfigMigrationCounts(0, 0, 0, 0, 0),
+        null,
+        List.of(),
+        new NexusMigrationValidation(false, List.of(), List.of()));
+  }
+
+  private static final class TestableNexusMigrationController extends NexusMigrationController {
+    private final NexusApiMigrationService migrationService;
+
+    private TestableNexusMigrationController(
+        BlobStoreRecord defaultStore,
+        NexusApiMigrationService migrationService,
+        RepositoryCatalogCache repositoryCatalogCache,
+        RepositoryRuntimeRegistry runtimeRegistry,
+        BlobStorageRegistry blobStorageRegistry,
+        SecurityCatalogCache securityCatalogCache,
+        SecurityAuthorizationCache securityAuthorizationCache) {
+      super(
+          null,
+          new StubBlobStoreDao(defaultStore),
+          null,
+          null,
+          null,
+          null,
+          new AllowingSecurityService(),
+          null,
+          null,
+          repositoryCatalogCache,
+          runtimeRegistry,
+          blobStorageRegistry,
+          securityCatalogCache,
+          securityAuthorizationCache);
+      this.migrationService = migrationService;
+    }
+
+    @Override
+    NexusApiMigrationService service() {
+      return migrationService;
+    }
+  }
+
+  private static final class CountingMigrationService extends NexusApiMigrationService {
+    private int migrations;
+    private NexusMigrationRequest request;
+
+    private CountingMigrationService() {
+      super(null, null, null, null, null, null);
+    }
+
+    @Override
+    public NexusMigrationResult migrate(NexusMigrationRequest request) {
+      migrations++;
+      this.request = request;
+      return successfulMigrationResult(request);
+    }
+  }
+
+  private static final class AllowingSecurityService extends SecurityManagementService {
+    private AllowingSecurityService() {
+      super(null);
+    }
+
+    @Override
+    public AccessDecision decide(PermissionSubject subject, String requestedPermission) {
+      return AccessDecision.allow();
+    }
+  }
+
+  private static final class CountingRepositoryCatalogCache extends RepositoryCatalogCache {
+    private int refreshes;
+
+    private CountingRepositoryCatalogCache() {
+      super(null, null, false, (ObjectProvider<CatalogCacheBroadcaster>) null);
+    }
+
+    @Override
+    public void refreshAfterCommit() {
+      refreshes++;
+    }
+  }
+
+  private static final class CountingRepositoryRuntimeRegistry extends RepositoryRuntimeRegistry {
+    private int invalidations;
+
+    private CountingRepositoryRuntimeRegistry() {
+      super(null, 0);
+    }
+
+    @Override
+    public void invalidateAll() {
+      invalidations++;
+    }
+  }
+
+  private static final class CountingBlobStorageRegistry extends BlobStorageRegistry {
+    private int refreshes;
+
+    private CountingBlobStorageRegistry() {
+      super(null, null, null, null, false);
+    }
+
+    @Override
+    public void refreshAllAndBroadcast() {
+      refreshes++;
+    }
+  }
+
+  private static final class CountingSecurityCatalogCache extends SecurityCatalogCache {
+    private int refreshes;
+
+    private CountingSecurityCatalogCache() {
+      super(null, false, (ObjectProvider<CatalogCacheBroadcaster>) null);
+    }
+
+    @Override
+    public void refreshAfterCommit() {
+      refreshes++;
+    }
+  }
+
+  private static final class CountingSecurityAuthorizationCache extends SecurityAuthorizationCache {
+    private int invalidations;
+
+    private CountingSecurityAuthorizationCache() {
+      super(null, null, false, 0);
+    }
+
+    @Override
+    public void invalidateAllAfterCommit() {
+      invalidations++;
+    }
+  }
+
+  private static final class StubBlobStoreDao extends BlobStoreDao {
+    private final BlobStoreRecord defaultStore;
+
+    private StubBlobStoreDao(BlobStoreRecord defaultStore) {
+      super(null, null);
+      this.defaultStore = defaultStore;
+    }
+
+    @Override
+    public Optional<BlobStoreRecord> findByName(String name) {
+      if (NexusMigrationController.REQUIRED_TARGET_BLOB_STORE.equals(name)) {
+        return Optional.ofNullable(defaultStore);
+      }
+      return Optional.empty();
+    }
+  }
+}

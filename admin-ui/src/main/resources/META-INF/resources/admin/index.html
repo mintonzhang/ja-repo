@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>nexus-plus administration</title>
+    <link rel="icon" type="image/svg+xml" href="/admin/assets/favicon.svg?v=20260609-kl-logo-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260612-sticky-heading-1">
+  </head>
+  <body>
+    <div class="nx-shell">
+      <header class="nx-topbar">
+        <div class="product">
+          <div class="logo-mark" aria-hidden="true">KL</div>
+          <div class="product-copy">
+            <div class="product-name">nexus-plus<br>Repository Manager</div>
+          </div>
+        </div>
+        <nav class="workspace-tabs" aria-label="Workspace">
+          <a class="workspace-tab" href="/browse/#browse/welcome">Browse</a>
+          <a class="workspace-tab is-active" href="/admin/#admin/repository/repositories" aria-current="page">Admin</a>
+        </nav>
+        <div class="top-spacer"></div>
+        <div class="user-menu" id="user-menu" hidden>
+          <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="user-pill" id="current-user-pill" title="Current user"></span>
+            <span class="user-menu-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="user-menu-popover" id="user-menu-popover" role="menu" aria-hidden="true">
+            <button class="user-menu-item" id="signout-button" type="button" role="menuitem">Sign out</button>
+          </div>
+        </div>
+      </header>
+      <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+      <aside class="nx-sidebar">
+        <nav class="side-nav" aria-label="Administration navigation">
+          <button class="side-group is-open" type="button">▾ Repository</button>
+          <button class="side-item is-active" data-view="repositories" type="button">▥ Repositories</button>
+          <button class="side-item" data-view="blobstores" type="button">▤ Blob Stores</button>
+          <button class="side-group is-open" type="button">▾ Security</button>
+          <button class="side-item" data-view="security-users" type="button">◉ Users</button>
+          <button class="side-item" data-view="security-roles" type="button">◈ Roles</button>
+          <button class="side-item" data-view="security-privileges" type="button">◍ Privileges</button>
+          <button class="side-item" data-view="security-realms" type="button">⇅ Realms</button>
+          <button class="side-item" data-view="security-ldap" type="button">◇ LDAP</button>
+          <button class="side-item" data-view="security-oidc" type="button">◒ OIDC</button>
+          <button class="side-item" data-view="security-anonymous" type="button">◌ Anonymous</button>
+          <button class="side-item" data-view="security-api-keys" type="button">⌘ API Keys</button>
+          <button class="side-item" data-view="security-audit-log" type="button">▦ Audit Log</button>
+          <button class="side-group is-open" type="button">▾ Migration</button>
+          <button class="side-item" data-view="nexus-migration" type="button">⇆ Nexus Metadata</button>
+          <button class="side-item" data-view="repository-data-migration" type="button">⇄ Nexus Repository Data</button>
+        </nav>
+      </aside>
+
+      <main class="nx-content">
+        <section class="view fixed-table-view is-active" id="repositories-view">
+          <div class="page-heading">
+            <span class="heading-icon">▥</span>
+            <h1>Repositories</h1>
+            <span class="heading-copy">Manage repositories</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-repository-button" type="button">⊕ Create repository</button>
+            <label class="filter-box">
+              <span class="filter-icon">▾</span>
+              <input id="repository-filter" type="search" placeholder="Filter">
+            </label>
+          </div>
+          <form class="blobstore-form" id="repository-form" hidden novalidate>
+            <div class="form-title" id="repository-form-title">Create repository</div>
+            <div class="form-grid">
+              <label>
+                <span>Recipe</span>
+                <select id="repository-recipe" name="recipe"></select>
+              </label>
+              <label>
+                <span>Name</span>
+                <input id="repository-name" name="name" type="text" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Blob store</span>
+                <select id="repository-blobstore" name="blobStoreName"></select>
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-online" name="online" type="checkbox" checked>
+                <span>Online</span>
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-strict" name="strictContentTypeValidation" type="checkbox" checked>
+                <span>Strict content type validation</span>
+              </label>
+            </div>
+            <fieldset class="form-grid" id="repository-hosted-fields" hidden>
+              <legend>Hosted settings</legend>
+              <label>
+                <span>Write policy</span>
+                <select id="repository-write-policy">
+                  <option value="ALLOW">Allow redeploy</option>
+                  <option value="ALLOW_ONCE">Disable redeploy</option>
+                  <option value="DENY">Read-only</option>
+                </select>
+              </label>
+              <label class="maven-only">
+                <span>Version policy</span>
+                <select id="repository-version-policy">
+                  <option value="RELEASE">Release</option>
+                  <option value="SNAPSHOT">Snapshot</option>
+                  <option value="MIXED">Mixed</option>
+                </select>
+              </label>
+              <label class="maven-only">
+                <span>Layout policy</span>
+                <select id="repository-layout-policy">
+                  <option value="STRICT">Strict</option>
+                  <option value="PERMISSIVE">Permissive</option>
+                </select>
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-proxy-fields" hidden>
+              <legend>Proxy settings</legend>
+              <label>
+                <span>Remote URL</span>
+                <input id="repository-remote-url" type="url" placeholder="https://repo.maven.apache.org/maven2/">
+              </label>
+              <label>
+                <span>Content max age (min)</span>
+                <input id="repository-content-max-age" type="number" min="-1" value="1440">
+              </label>
+              <label>
+                <span>Metadata max age (min)</span>
+                <input id="repository-metadata-max-age" type="number" min="-1" value="1440">
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-auto-block" type="checkbox" checked>
+                <span>Auto-block remote</span>
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-group-fields" hidden>
+              <legend>Group members</legend>
+              <div class="full-width member-transfer" id="member-transfer">
+                <div class="member-pane" data-side="available">
+                  <div class="member-pane-head">
+                    <span class="member-pane-title">Available <span class="member-count" id="member-available-count">0</span></span>
+                  </div>
+                  <input type="search" class="member-filter" id="member-filter" placeholder="Filter by name…" autocomplete="off">
+                  <ul class="member-list" id="member-available-list" tabindex="0" aria-label="Available repositories"></ul>
+                </div>
+                <div class="member-actions" role="group" aria-label="Move members">
+                  <button type="button" class="member-action" id="member-add-all" title="Add all">»</button>
+                  <button type="button" class="member-action" id="member-add" title="Add selected">›</button>
+                  <button type="button" class="member-action" id="member-remove" title="Remove selected">‹</button>
+                  <button type="button" class="member-action" id="member-remove-all" title="Remove all">«</button>
+                </div>
+                <div class="member-pane" data-side="selected">
+                  <div class="member-pane-head">
+                    <span class="member-pane-title">Selected <span class="member-count" id="member-selected-count">0</span></span>
+                    <span class="member-pane-hint">drag to reorder · priority top → bottom</span>
+                  </div>
+                  <ul class="member-list ordered" id="member-selected-list" tabindex="0" aria-label="Selected repositories (priority order)"></ul>
+                </div>
+              </div>
+            </fieldset>
+            <div class="form-actions">
+              <button class="create-button" id="save-repository-button" type="button">Save repository</button>
+              <button class="create-button secondary" id="cancel-repository-button" type="button">Cancel</button>
+            </div>
+          </form>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table">
+              <thead>
+                <tr>
+                  <th class="icon-column">↑</th>
+                  <th aria-sort="ascending">
+                    <button class="repo-sort-button is-active" data-repository-sort="name" type="button">
+                      <span>Name</span>
+                      <span class="repo-sort-indicator" aria-hidden="true">↑</span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repository-sort="recipe" type="button">
+                      <span>Recipe</span>
+                      <span class="repo-sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repository-sort="type" type="button">
+                      <span>Type</span>
+                      <span class="repo-sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repository-sort="format" type="button">
+                      <span>Format</span>
+                      <span class="repo-sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th>Status</th>
+                  <th>Blob store</th>
+                  <th>URL</th>
+                  <th class="actions-column">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="repository-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="blobstores-view">
+          <div class="page-heading">
+            <span class="heading-icon">▤</span>
+            <h1>Blob Stores</h1>
+            <span class="heading-copy">Manage blob stores</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-blobstore-button" type="button">⊕ Create blob store</button>
+            <label class="filter-box">
+              <span class="filter-icon">▾</span>
+              <input id="blobstore-filter" type="search" placeholder="Filter">
+            </label>
+          </div>
+          <form class="blobstore-form" id="blobstore-form" hidden novalidate>
+            <div class="form-title" id="blobstore-form-title">Create blob store</div>
+            <div class="form-grid">
+              <label>
+                <span>Name</span>
+                <input id="blobstore-name" name="name" type="text" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Engine</span>
+                <select id="blobstore-engine" name="engine">
+                  <option value="aws-s3">AWS S3 SDK</option>
+                  <option value="oss-native">OSS Native SDK</option>
+                  <option value="file">File</option>
+                </select>
+              </label>
+              <label class="s3-only">
+                <span>Endpoint</span>
+                <input id="blobstore-endpoint" name="endpoint" type="url" required>
+              </label>
+              <label class="s3-only">
+                <span>Region</span>
+                <input id="blobstore-region" name="region" type="text" required>
+              </label>
+              <label class="s3-only">
+                <span>Bucket</span>
+                <input id="blobstore-bucket" name="bucket" type="text" required>
+              </label>
+              <label class="s3-only">
+                <span>Prefix</span>
+                <input id="blobstore-prefix" name="prefix" type="text" autocomplete="off">
+              </label>
+              <label class="file-only" hidden>
+                <span>Path</span>
+                <input id="blobstore-path" name="path" type="text" autocomplete="off">
+              </label>
+              <label class="s3-only">
+                <span>Access key</span>
+                <input id="blobstore-access-key" name="accessKey" type="text" autocomplete="off" required>
+              </label>
+              <label class="s3-only">
+                <span>Secret key</span>
+                <input id="blobstore-secret-key" name="secretKey" type="password" autocomplete="new-password" required>
+              </label>
+              <label class="checkbox-field s3-only">
+                <input id="blobstore-path-style" name="pathStyleAccess" type="checkbox" checked>
+                <span>Path style access</span>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-blobstore-button" type="button" title="Save this Blob Store configuration.">Save blob store</button>
+              <button class="create-button secondary" id="cancel-blobstore-button" type="button">Cancel</button>
+            </div>
+          </form>
+          <div class="nx-table-frame">
+            <table class="nx-table blobstores-table">
+              <thead>
+                <tr>
+                  <th class="icon-column">↑</th>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Engine</th>
+                  <th>Health</th>
+                  <th>Bucket / Path</th>
+                  <th>Prefix / Resolved path</th>
+                  <th>Endpoint</th>
+                  <th>Path style</th>
+                  <th class="actions-column">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="blobstore-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view fixed-table-view" id="security-users-view">
+          <div class="page-heading">
+            <span class="heading-icon">◉</span>
+            <h1>Users</h1>
+            <span class="heading-copy">Manage local and external security users</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-security-user-button" type="button">⊕ Create user</button>
+            <label class="select-filter">
+              <span>Source</span>
+              <select id="security-user-source-filter">
+                <option value="">All sources</option>
+              </select>
+            </label>
+            <label class="filter-box">
+              <span class="filter-icon">▾</span>
+              <input id="security-user-filter" type="search" placeholder="Filter">
+            </label>
+          </div>
+          <form class="blobstore-form" id="security-user-form" hidden novalidate>
+            <div class="form-title" id="security-user-form-title">Create user</div>
+            <div class="form-grid">
+              <label><span>Source</span><select id="security-user-source"><option value="Local">Local</option><option value="OIDC">OIDC</option><option value="LDAP">LDAP</option></select></label>
+              <label><span>User ID</span><input id="security-user-id" type="text" autocomplete="off"></label>
+              <label><span>First name</span><input id="security-user-first-name" type="text"></label>
+              <label><span>Last name</span><input id="security-user-last-name" type="text"></label>
+              <label><span>Email</span><input id="security-user-email" type="email"></label>
+              <label><span>Status</span><select id="security-user-status"><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select></label>
+              <label><span>Password</span><input id="security-user-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+              <input id="security-user-roles" type="hidden">
+              <div class="full-width role-transfer-section">
+                <div class="role-transfer-title">Roles</div>
+                <div class="member-transfer role-transfer" id="user-role-transfer">
+                  <div class="member-pane" data-side="available">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Available <span class="member-count" id="user-role-available-count">0</span></span>
+                    </div>
+                    <input type="search" class="member-filter" id="user-role-filter" placeholder="Filter roles..." autocomplete="off">
+                    <ul class="member-list" id="user-role-available-list" tabindex="0" aria-label="Available roles"></ul>
+                  </div>
+                  <div class="member-actions" role="group" aria-label="Move user roles">
+                    <button type="button" class="member-action" id="user-role-add-all" title="Add all">&raquo;</button>
+                    <button type="button" class="member-action" id="user-role-add" title="Add selected">&rsaquo;</button>
+                    <button type="button" class="member-action" id="user-role-remove" title="Remove selected">&lsaquo;</button>
+                    <button type="button" class="member-action" id="user-role-remove-all" title="Remove all">&laquo;</button>
+                  </div>
+                  <div class="member-pane" data-side="selected">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Granted <span class="member-count" id="user-role-selected-count">0</span></span>
+                    </div>
+                    <ul class="member-list" id="user-role-selected-list" tabindex="0" aria-label="Granted roles"></ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-user-button" type="button">Save user</button>
+              <button class="create-button secondary" id="cancel-security-user-button" type="button">Cancel</button>
+            </div>
+          </form>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Source</th><th>User ID</th><th>Status</th><th>Email</th><th>Roles</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="security-user-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="security-roles-view">
+          <div class="page-heading">
+            <span class="heading-icon">◈</span>
+            <h1>Roles</h1>
+            <span class="heading-copy">Manage role privileges and inherited roles</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-security-role-button" type="button">⊕ Create role</button>
+            <label class="filter-box"><span class="filter-icon">▾</span><input id="security-role-filter" type="search" placeholder="Filter"></label>
+          </div>
+          <form class="blobstore-form" id="security-role-form" hidden novalidate>
+            <div class="form-title" id="security-role-form-title">Create role</div>
+            <div class="form-grid">
+              <label><span>Role ID</span><input id="security-role-id" type="text"></label>
+              <label><span>Name</span><input id="security-role-name" type="text"></label>
+              <label><span>Description</span><input id="security-role-description" type="text"></label>
+              <input id="security-role-privileges" type="hidden">
+              <input id="security-role-roles" type="hidden">
+              <div class="full-width role-transfer-section">
+                <div class="role-transfer-title">Privileges</div>
+                <div class="member-transfer role-transfer" id="role-privilege-transfer">
+                  <div class="member-pane" data-side="available">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Available <span class="member-count" id="role-privilege-available-count">0</span></span>
+                    </div>
+                    <input type="search" class="member-filter" id="role-privilege-filter" placeholder="Filter privileges..." autocomplete="off">
+                    <ul class="member-list" id="role-privilege-available-list" tabindex="0" aria-label="Available privileges"></ul>
+                  </div>
+                  <div class="member-actions" role="group" aria-label="Move privileges">
+                    <button type="button" class="member-action" id="role-privilege-add-all" title="Add all">&raquo;</button>
+                    <button type="button" class="member-action" id="role-privilege-add" title="Add selected">&rsaquo;</button>
+                    <button type="button" class="member-action" id="role-privilege-remove" title="Remove selected">&lsaquo;</button>
+                    <button type="button" class="member-action" id="role-privilege-remove-all" title="Remove all">&laquo;</button>
+                  </div>
+                  <div class="member-pane" data-side="selected">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Given <span class="member-count" id="role-privilege-selected-count">0</span></span>
+                    </div>
+                    <ul class="member-list" id="role-privilege-selected-list" tabindex="0" aria-label="Given privileges"></ul>
+                  </div>
+                </div>
+              </div>
+              <div class="full-width role-transfer-section">
+                <div class="role-transfer-title">Roles</div>
+                <div class="member-transfer role-transfer" id="role-contained-transfer">
+                  <div class="member-pane" data-side="available">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Available <span class="member-count" id="role-contained-available-count">0</span></span>
+                    </div>
+                    <input type="search" class="member-filter" id="role-contained-filter" placeholder="Filter roles..." autocomplete="off">
+                    <ul class="member-list" id="role-contained-available-list" tabindex="0" aria-label="Available roles"></ul>
+                  </div>
+                  <div class="member-actions" role="group" aria-label="Move roles">
+                    <button type="button" class="member-action" id="role-contained-add-all" title="Add all">&raquo;</button>
+                    <button type="button" class="member-action" id="role-contained-add" title="Add selected">&rsaquo;</button>
+                    <button type="button" class="member-action" id="role-contained-remove" title="Remove selected">&lsaquo;</button>
+                    <button type="button" class="member-action" id="role-contained-remove-all" title="Remove all">&laquo;</button>
+                  </div>
+                  <div class="member-pane" data-side="selected">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Contained <span class="member-count" id="role-contained-selected-count">0</span></span>
+                    </div>
+                    <ul class="member-list" id="role-contained-selected-list" tabindex="0" aria-label="Contained roles"></ul>
+                  </div>
+                </div>
+              </div>
+              <label class="checkbox-field" id="security-role-readonly-field" hidden><input id="security-role-readonly" type="checkbox" disabled><span>Read only</span></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-role-button" type="button">Save role</button>
+              <button class="create-button secondary" id="cancel-security-role-button" type="button">Cancel</button>
+            </div>
+          </form>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Role ID</th><th>Name</th><th>Description</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="security-role-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view fixed-table-view" id="security-privileges-view">
+          <div class="page-heading">
+            <span class="heading-icon">◍</span>
+            <h1>Privileges</h1>
+            <span class="heading-copy">Manage Nexus-compatible wildcard and repository privileges</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-security-privilege-button" type="button">⊕ Create privilege</button>
+            <label class="filter-box"><span class="filter-icon">▾</span><input id="security-privilege-filter" type="search" placeholder="Filter"></label>
+          </div>
+          <form class="blobstore-form" id="security-privilege-form" hidden novalidate>
+            <div class="form-title" id="security-privilege-form-title">Create privilege</div>
+            <div class="form-grid">
+              <label><span>Privilege ID</span><input id="security-privilege-id" type="text"></label>
+              <label><span>Name</span><input id="security-privilege-name" type="text"></label>
+              <label><span>Type</span><select id="security-privilege-type"><option value="wildcard">wildcard</option><option value="application">application</option><option value="repository-view">repository-view</option><option value="repository-admin">repository-admin</option><option value="repository-content-selector">repository-content-selector</option></select></label>
+              <label><span>Description</span><input id="security-privilege-description" type="text"></label>
+              <label class="checkbox-field"><input id="security-privilege-readonly" type="checkbox"><span>Read only</span></label>
+              <label class="full-width"><span>Properties JSON</span><textarea id="security-privilege-properties" rows="5" spellcheck="false">{"pattern":"nexus:*"}</textarea></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-privilege-button" type="button">Save privilege</button>
+              <button class="create-button secondary" id="cancel-security-privilege-button" type="button">Cancel</button>
+            </div>
+          </form>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Privilege ID</th><th>Type</th><th>Name</th><th>Permission</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="security-privilege-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="security-realms-view">
+          <div class="page-heading">
+            <span class="heading-icon">⇅</span>
+            <h1>Realms</h1>
+            <span class="heading-copy">Manage local, LDAP and OIDC authentication priority</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="save-security-realms-button" type="button">Save realm order</button>
+          </div>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Enabled</th><th>Priority</th><th>Realm</th><th>Type</th><th>Source</th></tr></thead>
+              <tbody id="security-realm-table"></tbody>
+            </table>
+          </div>
+          </section>
+
+          <section class="view" id="security-ldap-view">
+            <div class="page-heading">
+              <span class="heading-icon">◇</span>
+              <h1>LDAP</h1>
+              <span class="heading-copy">Manage LDAP connection, user mapping, and group roles</span>
+            </div>
+            <form class="blobstore-form" id="security-ldap-form" novalidate>
+              <div class="form-grid">
+                <label class="checkbox-field">
+                  <input id="security-ldap-enabled" type="checkbox">
+                  <span>Enabled</span>
+                </label>
+                <label><span>Priority</span><input id="security-ldap-priority" type="number" value="10"></label>
+                <label><span>Source</span><input id="security-ldap-source" type="text" value="LDAP"></label>
+                <label><span>Name</span><input id="security-ldap-name" type="text" value="LDAP"></label>
+                <label><span>Protocol</span><select id="security-ldap-protocol"><option value="ldap">ldap</option><option value="ldaps">ldaps</option></select></label>
+                <label><span>Host</span><input id="security-ldap-host" type="text"></label>
+                <label><span>Port</span><input id="security-ldap-port" type="number" min="1"></label>
+                <label class="checkbox-field"><input id="security-ldap-trust-store" type="checkbox"><span>Use trust store</span></label>
+                <label class="full-width"><span>URL</span><input id="security-ldap-url" type="url" placeholder="ldap://ldap.example.com:389/dc=example,dc=com"></label>
+                <label class="full-width"><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
+                <label><span>Auth scheme</span><input id="security-ldap-auth-scheme" type="text" value="simple"></label>
+                <label><span>Auth realm</span><input id="security-ldap-auth-realm" type="text"></label>
+                <label><span>Auth username</span><input id="security-ldap-auth-username" type="text"></label>
+                <label><span>Auth password</span><input id="security-ldap-auth-password" type="password" autocomplete="new-password"></label>
+                <label><span>Connection timeout</span><input id="security-ldap-connection-timeout" type="number" min="0" value="30"></label>
+                <label><span>Retry delay</span><input id="security-ldap-retry-delay" type="number" min="0"></label>
+                <label><span>Max incidents</span><input id="security-ldap-max-incidents" type="number" min="0"></label>
+                <label><span>User base DN</span><input id="security-ldap-user-base-dn" type="text"></label>
+                <label class="checkbox-field"><input id="security-ldap-user-subtree" type="checkbox" checked><span>User subtree</span></label>
+                <label><span>User object class</span><input id="security-ldap-user-object-class" type="text" value="inetOrgPerson"></label>
+                <label><span>User filter</span><input id="security-ldap-user-filter" type="text"></label>
+                <label><span>User ID attribute</span><input id="security-ldap-user-id-attribute" type="text" value="uid"></label>
+                <label><span>Real name attribute</span><input id="security-ldap-user-real-name-attribute" type="text" value="cn"></label>
+                <label><span>MemberOf attribute</span><input id="security-ldap-user-member-of-attribute" type="text" value="memberOf"></label>
+                <label><span>Email attribute</span><input id="security-ldap-user-email-attribute" type="text" value="mail"></label>
+                <label><span>Password attribute</span><input id="security-ldap-user-password-attribute" type="text" value="userPassword"></label>
+                <label class="checkbox-field"><input id="security-ldap-groups-as-roles" type="checkbox" checked><span>Groups as roles</span></label>
+                <label><span>Group type</span><select id="security-ldap-group-type"><option value="static">static</option><option value="dynamic">dynamic</option></select></label>
+                <label><span>Group base DN</span><input id="security-ldap-group-base-dn" type="text"></label>
+                <label class="checkbox-field"><input id="security-ldap-group-subtree" type="checkbox" checked><span>Group subtree</span></label>
+                <label><span>Group ID attribute</span><input id="security-ldap-group-id-attribute" type="text" value="cn"></label>
+                <label><span>Group member attribute</span><input id="security-ldap-group-member-attribute" type="text" value="member"></label>
+                <label><span>Group member format</span><input id="security-ldap-group-member-format" type="text" value="${dn}"></label>
+                <label><span>Group object class</span><input id="security-ldap-group-object-class" type="text" value="groupOfNames"></label>
+                <label class="full-width"><span>Attributes JSON</span><textarea id="security-ldap-attributes" rows="5" spellcheck="false">{}</textarea></label>
+              </div>
+              <div class="form-actions">
+                <button class="create-button" id="save-security-ldap-button" type="button">Save LDAP settings</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="view" id="security-oidc-view">
+            <div class="page-heading">
+            <span class="heading-icon">◒</span>
+            <h1>OIDC</h1>
+            <span class="heading-copy">Manage OIDC issuer, token validation, and claim mapping</span>
+          </div>
+          <form class="blobstore-form" id="security-oidc-form" novalidate>
+            <div class="form-grid">
+              <label class="checkbox-field">
+                <input id="security-oidc-enabled" type="checkbox">
+                <span>Enabled</span>
+              </label>
+              <label><span>Priority</span><input id="security-oidc-priority" type="number" value="20"></label>
+              <label><span>Source</span><input id="security-oidc-source" type="text" value="OIDC"></label>
+              <label><span>Issuer</span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
+              <label class="full-width"><span>JWKS URI</span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
+              <label><span>Audience</span><input id="security-oidc-audience" type="text"></label>
+              <label><span>Client ID</span><input id="security-oidc-client-id" type="text"></label>
+              <label><span>Client secret</span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+              <label><span>Scopes</span><input id="security-oidc-scopes" type="text" value="openid profile email"></label>
+              <label class="full-width"><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
+              <label class="full-width"><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
+              <label class="full-width"><span>Redirect URI</span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
+              <label><span>User ID claim</span><input id="security-oidc-user-id-claim" type="text" value="preferred_username"></label>
+              <label><span>First name claim</span><input id="security-oidc-first-name-claim" type="text" value="given_name"></label>
+              <label><span>Last name claim</span><input id="security-oidc-last-name-claim" type="text" value="family_name"></label>
+              <label><span>Email claim</span><input id="security-oidc-email-claim" type="text" value="email"></label>
+              <label><span>Groups claim</span><input id="security-oidc-groups-claim" type="text" value="groups"></label>
+              <label><span>Roles claim</span><input id="security-oidc-roles-claim" type="text" value="roles"></label>
+              <label><span>Clock skew seconds</span><input id="security-oidc-clock-skew" type="number" min="0" value="60"></label>
+              <label><span>JWKS cache seconds</span><input id="security-oidc-jwks-cache" type="number" min="0" value="300"></label>
+              <label class="full-width"><span>Attributes JSON</span><textarea id="security-oidc-attributes" rows="5" spellcheck="false">{}</textarea></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-oidc-button" type="button">Save OIDC settings</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="security-api-keys-view">
+          <div class="page-heading">
+            <span class="heading-icon">⌘</span>
+            <h1>API Keys</h1>
+            <span class="heading-copy">Manage API key ownership and domains</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-security-api-key-button" type="button">⊕ Create API key</button>
+          </div>
+          <form class="blobstore-form" id="security-api-key-form" hidden novalidate>
+            <div class="form-title">Create API key</div>
+            <div class="form-grid">
+              <label><span>Domain</span><input id="security-api-key-domain" type="text" value="nexus"></label>
+              <label><span>Owner source</span><input id="security-api-key-owner-source" type="text" value="Local"></label>
+              <label><span>Owner user ID</span><input id="security-api-key-owner-user-id" type="text"></label>
+              <label><span>Display name</span><input id="security-api-key-display-name" type="text"></label>
+              <label><span>Scopes</span><input id="security-api-key-scopes" type="text" placeholder="read, write"></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-api-key-button" type="button">Create API key</button>
+              <button class="create-button secondary" id="cancel-security-api-key-button" type="button">Cancel</button>
+            </div>
+          </form>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Domain</th><th>Owner</th><th>Status</th><th>Prefix</th><th>Scopes</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="security-api-key-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="security-audit-log-view">
+          <div class="page-heading">
+            <span class="heading-icon">▦</span>
+            <h1>Audit Log</h1>
+            <span class="heading-copy">Search management mutations recorded in MySQL</span>
+          </div>
+          <form class="audit-filter-bar" id="audit-log-filter-form">
+            <label class="filter-box audit-query">
+              <span class="filter-icon">▾</span>
+              <input id="audit-log-query" type="search" placeholder="Search actor, path, permission, details">
+            </label>
+            <label class="filter-box audit-short">
+              <span class="filter-icon">◉</span>
+              <input id="audit-log-actor" type="search" placeholder="Actor">
+            </label>
+            <label class="select-filter">
+              <span>Outcome</span>
+              <select id="audit-log-outcome">
+                <option value="">All</option>
+                <option value="SUCCESS">SUCCESS</option>
+                <option value="FAILURE">FAILURE</option>
+              </select>
+            </label>
+            <label class="audit-field">
+              <span>From</span>
+              <input id="audit-log-from" type="datetime-local">
+            </label>
+            <label class="audit-field">
+              <span>To</span>
+              <input id="audit-log-to" type="datetime-local">
+            </label>
+            <button class="create-button" id="audit-log-search-button" type="submit">Search</button>
+            <button class="create-button secondary" id="audit-log-reset-button" type="button">Reset</button>
+          </form>
+          <div class="nx-table-frame audit-table-frame">
+            <table class="nx-table audit-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Actor</th>
+                  <th>Remote</th>
+                  <th>Method</th>
+                  <th>Path</th>
+                  <th>Permission</th>
+                  <th>Status</th>
+                  <th>Outcome</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="audit-log-table"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar" id="audit-log-pagination">
+            <span class="pagination-summary" id="audit-log-summary">0 results</span>
+            <button class="row-action" id="audit-log-prev-page" type="button">‹</button>
+            <span class="pagination-page" id="audit-log-page-label">Page 1 / 1</span>
+            <button class="row-action" id="audit-log-next-page" type="button">›</button>
+            <label class="select-filter pagination-size">
+              <span>Rows</span>
+              <select id="audit-log-size">
+                <option value="15" selected>15</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="view" id="security-anonymous-view">
+          <div class="page-heading">
+            <span class="heading-icon">◌</span>
+            <h1>Anonymous Access</h1>
+            <span class="heading-copy">Configure the anonymous user used for unauthenticated repository reads</span>
+          </div>
+          <form class="blobstore-form" id="security-anonymous-form" novalidate>
+            <div class="form-grid">
+              <label class="checkbox-field">
+                <input id="security-anonymous-enabled" type="checkbox">
+                <span>Enabled</span>
+              </label>
+              <label><span>User source</span><input id="security-anonymous-source" type="text" value="Local"></label>
+              <label><span>User ID</span><input id="security-anonymous-user-id" type="text" value="anonymous"></label>
+              <label><span>Realm name</span><input id="security-anonymous-realm-name" type="text" value="NexusAuthorizingRealm"></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-anonymous-button" type="button">Save anonymous access</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="nexus-migration-view">
+          <div class="page-heading">
+            <span class="heading-icon">⇆</span>
+            <h1>Nexus Metadata</h1>
+            <span class="heading-copy">Migrate Nexus users, roles, permissions, blob stores, and repository definitions</span>
+          </div>
+          <form class="blobstore-form" id="nexus-migration-form" novalidate>
+            <div class="form-grid">
+              <label><span>Source URL</span><input id="migration-source-url" type="url" value="http://localhost:28090/"></label>
+              <label><span>Source username</span><input id="migration-source-username" type="text" value="admin"></label>
+              <label><span>Source password</span><input id="migration-source-password" type="password" autocomplete="new-password"></label>
+              <label><span>Source version</span><input id="migration-source-version" type="text" value="3.29.2-02"></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="migration-preflight-button" type="button">Run preflight</button>
+              <button class="create-button" id="migration-run-button" type="button">Run migration</button>
+            </div>
+          </form>
+          <div class="migration-result" id="migration-result" hidden></div>
+        </section>
+
+        <section class="view" id="repository-data-migration-view">
+          <div class="page-heading">
+            <span class="heading-icon">⇄</span>
+            <h1>Nexus Repository Data</h1>
+            <span class="heading-copy">Discover and migrate hosted repository assets from Nexus</span>
+          </div>
+          <form class="blobstore-form" id="repository-data-migration-form" novalidate>
+            <div class="form-grid">
+              <label><span>Source URL</span><input id="repository-data-migration-source-url" type="url" value="http://localhost:28090/"></label>
+              <label><span>Source username</span><input id="repository-data-migration-source-username" type="text" value="admin"></label>
+              <label><span>Source password</span><input id="repository-data-migration-source-password" type="password" autocomplete="new-password"></label>
+              <label><span>Source version</span><input id="repository-data-migration-source-version" type="text" value="3.29.2-02"></label>
+              <label><span>Page size</span><input id="repository-data-migration-page-size" type="number" min="100" max="5000" value="1000"></label>
+              <label><span>Concurrency</span><input id="repository-data-migration-concurrency" type="number" min="1" max="64" value="8"></label>
+              <label><span>Metadata since</span><input id="repository-data-migration-metadata-since" type="datetime-local"></label>
+              <label class="checkbox-field">
+                <input id="repository-data-migration-checksum-validation" type="checkbox" checked>
+                <span>Validate size</span>
+              </label>
+              <label class="full-width"><span>Optional proxy repositories</span><textarea id="repository-data-migration-backup-proxies" rows="2" spellcheck="false" placeholder="maven-proxy-backup"></textarea></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="repository-data-migration-start-button" type="button">Sync metadata</button>
+              <button class="create-button secondary" id="repository-data-migration-metadata-button" type="button">Continue metadata</button>
+              <button class="create-button" id="repository-data-migration-packages-button" type="button">Sync packages</button>
+              <button class="create-button secondary" id="repository-data-migration-retry-failed-button" type="button">Retry failed</button>
+              <button class="create-button secondary" id="repository-data-migration-refresh-button" type="button">Refresh jobs</button>
+            </div>
+          </form>
+          <div class="migration-result" id="repository-data-migration-result" hidden></div>
+        </section>
+
+      </main>
+    </div>
+
+    <script src="./assets/admin.js?v=20260609-user-menu-1"></script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="KL">
+  <defs>
+    <linearGradient id="kl-bg" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#14756b"/>
+      <stop offset="0.58" stop-color="#1f9380"/>
+      <stop offset="1" stop-color="#b85f3d"/>
+    </linearGradient>
+    <linearGradient id="kl-shine" x1="10" y1="8" x2="42" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#kl-bg)"/>
+  <rect width="64" height="64" rx="14" fill="url(#kl-shine)"/>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="12.5" fill="none" stroke="#ffffff" stroke-opacity="0.34" stroke-width="3"/>
+  <text x="32" y="39" text-anchor="middle" fill="#ffffff" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800" letter-spacing="0">KL</text>
+</svg>

@@ -1,0 +1,235 @@
+# Build And Deployment Guide
+
+This document covers local startup, release builds, archive package deployment, production deployment architecture, and resource sizing for nexus-plus. Hot-reload development and protocol testing are documented in the [Development Guide](development-guide.md).
+
+## Prerequisites
+
+- JDK 21
+- Maven 3.9 or a compatible version
+- MySQL 8.0
+- Optional: Docker, for building images or running containerized dependencies
+
+The service requires MySQL at runtime. For local trials, the blob store can use File storage. For production, OSS/S3 is recommended.
+
+## Local Quick Start
+
+Create a local database and account:
+
+```sql
+CREATE DATABASE IF NOT EXISTS nexus_plus DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'nexus_plus'@'%' IDENTIFIED BY 'nexus_plus';
+GRANT ALL PRIVILEGES ON nexus_plus.* TO 'nexus_plus'@'%';
+FLUSH PRIVILEGES;
+```
+
+The default configuration connects to `127.0.0.1:13306/nexus_plus`. If your local MySQL uses a different port or account, override it with Spring Boot environment variables:
+
+```bash
+export SPRING_DATASOURCE_URL='jdbc:mysql://127.0.0.1:3306/nexus_plus?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai'
+export SPRING_DATASOURCE_USERNAME=nexus_plus
+export SPRING_DATASOURCE_PASSWORD=nexus_plus
+```
+
+Build and start:
+
+```bash
+mvn -pl server -am -DskipTests package spring-boot:repackage
+java -jar server/target/nexus-plus-server-*.jar
+```
+
+After startup, open:
+
+- Admin console: `http://127.0.0.1:8080/admin/`
+- User browser: `http://127.0.0.1:8080/browse/`
+- Health check: `http://127.0.0.1:8081/actuator/health`
+- Prometheus metrics: `http://127.0.0.1:8081/actuator/prometheus`
+
+After entering the admin console for the first time, create a blob store named `default`. File is fine for local trials; OSS/S3 is recommended for production.
+
+## Spring Boot Executable Jar
+
+Build the executable jar:
+
+```bash
+mvn -pl server -am -DskipTests package spring-boot:repackage
+```
+
+Artifact path:
+
+```text
+server/target/nexus-plus-server-<version>.jar
+```
+
+Note: a normal `server` module jar does not contain a Spring Boot executable entrypoint. Before copying or deploying `server/target/nexus-plus-server-*.jar`, run `spring-boot:repackage`.
+
+## Docker Image
+
+Build the default image:
+
+```bash
+./scripts/build-docker-image.sh
+```
+
+Specify an image tag:
+
+```bash
+./scripts/build-docker-image.sh nexus-plus:local
+```
+
+Container deployments should still use an independent MySQL instance and OSS/S3 blob store. Do not use a container-local filesystem as long-term production blob storage.
+
+## Archive Package Deployment
+
+The archive package contains the executable jar, start script, stop script, restart script, status script, and external configuration file. It is suitable for quick trials, traditional VM deployment, or environments that need systemd integration.
+
+Run from the repository root:
+
+```bash
+./scripts/build-dist.sh
+```
+
+The build generates:
+
+```text
+server/target/nexus-plus-<release-version>.tar.gz
+server/target/nexus-plus-<release-version>.zip
+```
+
+If a future development version uses the Maven `-SNAPSHOT` suffix, the build script automatically removes that suffix from the archive filename and extracted directory name.
+
+Archive layout:
+
+```text
+nexus-plus-<release-version>/
+  bin/
+    start.sh
+    stop.sh
+    restart.sh
+    status.sh
+  conf/
+    application.properties
+  lib/
+    nexus-plus.jar
+  logs/
+  data/
+```
+
+`logs/` and `data/` are created automatically by the startup script.
+
+Extract:
+
+```bash
+tar -xzf nexus-plus-<release-version>.tar.gz
+cd nexus-plus-<release-version>
+```
+
+Edit the external configuration:
+
+```bash
+vi conf/application.properties
+```
+
+At minimum, verify these settings:
+
+```properties
+server.port=8080
+management.server.port=8081
+
+spring.datasource.url=jdbc:mysql://127.0.0.1:3306/nexus_plus?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+spring.datasource.username=nexus_plus
+spring.datasource.password=nexus_plus
+
+nexus-plus.security.encryption.credential-secret=CHANGE_ME_credential_secret_at_least_32_chars
+nexus-plus.security.encryption.api-key-payload-secret=CHANGE_ME_api_key_payload_secret_at_least_32_chars
+```
+
+Replace `credential-secret` and `api-key-payload-secret` with strong, stable random strings. They encrypt blob store credentials, authentication realm keys, and API key payloads. Do not change them casually after data has been written.
+
+Common scripts:
+
+```bash
+bin/start.sh
+bin/status.sh
+bin/restart.sh
+bin/stop.sh
+```
+
+The startup script uses the extracted directory as `NEXUS_PLUS_HOME` by default. Common paths can be overridden with environment variables:
+
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `NEXUS_PLUS_HOME` | Extracted directory | Application home |
+| `NEXUS_PLUS_CONF_DIR` | `$NEXUS_PLUS_HOME/conf` | External configuration directory |
+| `NEXUS_PLUS_LOG_DIR` | `$NEXUS_PLUS_HOME/logs` | Log directory |
+| `NEXUS_PLUS_PID_FILE` | `$NEXUS_PLUS_LOG_DIR/nexus-plus.pid` | PID file |
+| `NEXUS_PLUS_JAR_FILE` | `$NEXUS_PLUS_HOME/lib/nexus-plus.jar` | Executable jar |
+| `JAVA_OPTS` | Empty | JVM options |
+
+Example:
+
+```bash
+export JAVA_OPTS='-Xms2g -Xmx4g -XX:+UseG1GC'
+bin/start.sh
+```
+
+## systemd Example
+
+You can manage archive deployments with systemd:
+
+```ini
+[Unit]
+Description=nexus-plus
+After=network.target
+
+[Service]
+Type=forking
+User=nexusplus
+Group=nexusplus
+Environment="JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC"
+WorkingDirectory=/opt/nexus-plus
+ExecStart=/opt/nexus-plus/bin/start.sh
+ExecStop=/opt/nexus-plus/bin/stop.sh
+PIDFile=/opt/nexus-plus/logs/nexus-plus.pid
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## Production Deployment Architecture
+
+Production deployments should use multiple nexus-plus replicas, an independent MySQL instance, and an OSS/S3 blob store:
+
+```text
+Maven/npm/PyPI/Go/Helm/NuGet/RubyGems/Yum clients
+        |
+DNS / Load Balancer / Reverse Proxy
+        |
+nexus-plus replicas
+        |---------------- MySQL 8
+        |---------------- OSS / S3 blob store
+```
+
+nexus-plus does not depend on OrientDB, embedded Elasticsearch, or a local persistent blob filesystem at runtime. Repositories, components, assets, users, permissions, tokens, audit logs, migration state, and cross-replica coordination state are stored in MySQL. Large blobs are stored in OSS/S3. In-process TTL cache is only a rebuildable hot cache.
+
+## Production Resource Recommendations
+
+- nexus-plus service instance: at least 2C4G per production instance. For high availability, deploy at least 2 replicas and scale horizontally based on request volume.
+- MySQL: at least 2C4G for production. Use an independent MySQL instance and scale CPU, memory, disk, and IOPS based on repository count, package count, index size, and migration workload.
+- Blob storage: use OSS/S3 in production. File blob store is better suited to local development, testing, or specific deployments with a strongly consistent shared filesystem.
+- Use independent MySQL and an independent OSS/S3 bucket in production. Do not use File blob store as long-term production storage.
+- In multi-replica deployment, sessions, authentication tickets, catalog watermarks, locks, and migration progress are coordinated through MySQL. Losing node-local cache does not affect correctness.
+- For large repository migrations, increase `Concurrency` on the `Nexus Repository Data` page from the default `8` to `32`, then tune further based on source Nexus, network, and object storage pressure.
+
+## Upgrade Recommendations
+
+For archive deployments, the recommended upgrade flow is:
+
+1. Extract the new version into a new directory.
+2. Copy the old `conf/application.properties`.
+3. Stop the old version.
+4. Start the new version.
+5. Verify `/actuator/health`, `/admin/`, `/browse/`, and key repository package pulls.
+
+If the same MySQL and OSS/S3 blob store are used, back up MySQL before upgrading and confirm the new Flyway migrations are expected.

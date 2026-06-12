@@ -1,0 +1,213 @@
+{
+  "repositoryTargets": [
+    {
+      "@rid": "#50:1",
+      "id": "team-maven-target",
+      "name": "Team Maven target",
+      "format": "maven2",
+      "patterns": [
+        "/com/acme/team/.*\\.jar",
+        "/com/acme/team/.*\\.pom"
+      ]
+    }
+  ],
+  "contentSelectors": [
+    {
+      "@rid": "#51:1",
+      "name": "team-csel",
+      "type": "csel",
+      "description": "Team Maven selector",
+      "attributes": {
+        "expression": "format == \"maven2\" && ( path =~ \"^/com/acme/team/.*\" || path =~ \".*maven-metadata\\.xml.*\" )"
+      }
+    }
+  ],
+  "privileges": [
+    {
+      "id": "nx-repository-view-maven2-releases-read",
+      "name": "Read releases",
+      "description": "Read Maven releases",
+      "type": "repository-view",
+      "readOnly": false,
+      "properties": {
+        "repositoryFormat": "maven2",
+        "repositoryId": "maven-releases",
+        "action": "read,browse"
+      }
+    },
+    {
+      "id": "nx-repository-target-team-read",
+      "name": "Read team target",
+      "description": "Read legacy team target",
+      "type": "repository-target",
+      "readOnly": false,
+      "properties": {
+        "repositoryTargetId": "team-maven-target",
+        "repositoryFormat": "maven2",
+        "repositoryId": "maven-releases",
+        "action": "read"
+      }
+    },
+    {
+      "id": "nx-repository-content-selector-team-read",
+      "name": "Read team selector",
+      "description": "Read team content selector",
+      "type": "repository-content-selector",
+      "readOnly": false,
+      "properties": {
+        "contentSelector": "team-csel",
+        "repository": "maven2/*",
+        "actions": [
+          "read",
+          "browse"
+        ]
+      }
+    },
+    {
+      "id": "nx-security-read",
+      "name": "Security read",
+      "description": "Read security settings",
+      "type": "application",
+      "readOnly": false,
+      "properties": {
+        "domain": "security",
+        "actions": "read"
+      }
+    },
+    {
+      "id": "nx-all",
+      "name": "All permissions",
+      "type": "wildcard",
+      "readOnly": true,
+      "properties": {
+        "permission": "nexus:*"
+      }
+    }
+  ],
+  "roles": [
+    {
+      "id": "nx-team-reader",
+      "source": "default",
+      "name": "Team reader",
+      "description": "Team read role",
+      "readOnly": false,
+      "privileges": [
+        "nx-repository-view-maven2-releases-read",
+        "nx-repository-target-team-read",
+        "nx-repository-content-selector-team-read"
+      ],
+      "roles": [
+        "nx-security-viewer"
+      ]
+    },
+    {
+      "id": "nx-security-viewer",
+      "source": "LDAP",
+      "name": "Security viewer",
+      "description": "Read-only security role",
+      "readOnly": false,
+      "privileges": [
+        "nx-security-read"
+      ],
+      "roles": []
+    },
+    {
+      "id": "nx-admin",
+      "source": "Nexus",
+      "name": "Admin",
+      "description": "Administrator",
+      "readOnly": true,
+      "privileges": [
+        "nx-all"
+      ],
+      "roles": []
+    }
+  ],
+  "users": [
+    {
+      "@rid": "#60:1",
+      "id": "alice",
+      "source": "NexusAuthenticatingRealm",
+      "firstName": "Alice",
+      "lastName": "Local",
+      "email": "alice@example.com",
+      "password": "$shiro1$SHA-512$1024$salt$hash",
+      "status": "active"
+    },
+    {
+      "@rid": "#60:2",
+      "id": "bob",
+      "source": "LdapRealm",
+      "firstName": "Bob",
+      "lastName": "LDAP",
+      "email": "bob@example.com",
+      "status": "active"
+    },
+    {
+      "@rid": "#60:3",
+      "id": "carol",
+      "source": "OidcRealm",
+      "firstName": "Carol",
+      "lastName": "OIDC",
+      "email": "carol@example.com",
+      "status": "active"
+    }
+  ],
+  "userRoleMappings": [
+    {
+      "userId": "alice",
+      "source": "NexusAuthorizingRealm",
+      "roles": [
+        "nx-team-reader"
+      ]
+    },
+    {
+      "userId": "bob",
+      "source": "LdapRealm",
+      "roles": [
+        "nx-team-reader"
+      ]
+    },
+    {
+      "userId": "carol",
+      "source": "OidcRealm",
+      "roles": [
+        "nx-security-viewer"
+      ]
+    }
+  ],
+  "realmOrder": [
+    "LdapRealm",
+    "NexusAuthenticatingRealm",
+    "NexusAuthorizingRealm",
+    "OidcRealm",
+    "SomeUnsupportedRealm"
+  ],
+  "apiKeys": [
+    {
+      "domain": "NpmToken",
+      "ownerSource": "NexusAuthorizingRealm",
+      "ownerUserId": "alice",
+      "api_key": "alice-raw-token",
+      "displayName": "npm alice",
+      "status": "ACTIVE"
+    },
+    {
+      "domain": "NpmToken",
+      "principals": {
+        "primaryPrincipal": "bob",
+        "realmNames": [
+          "LdapRealm"
+        ]
+      },
+      "apiKey": "bob-raw-token",
+      "displayName": "npm bob",
+      "status": "ACTIVE"
+    }
+  ],
+  "anonymous": {
+    "enabled": true,
+    "user_id": "anonymous",
+    "realm_name": "NexusAuthorizingRealm"
+  }
+}

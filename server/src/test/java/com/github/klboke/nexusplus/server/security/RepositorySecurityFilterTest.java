@@ -1,0 +1,450 @@
+package com.github.klboke.nexusplus.server.security;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.nexusplus.auth.AccessDecision;
+import com.github.klboke.nexusplus.auth.PermissionAction;
+import com.github.klboke.nexusplus.auth.PermissionSubject;
+import com.github.klboke.nexusplus.auth.RepositoryPermission;
+import com.github.klboke.nexusplus.core.RepositoryFormat;
+import com.github.klboke.nexusplus.core.RepositoryType;
+import com.github.klboke.nexusplus.persistence.mysql.dao.RepositoryDao;
+import com.github.klboke.nexusplus.persistence.mysql.dao.SecurityDao;
+import com.github.klboke.nexusplus.persistence.mysql.model.RepositoryRecord;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.lang.reflect.Proxy;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import org.junit.jupiter.api.Test;
+import org.springframework.core.annotation.Order;
+import org.springframework.session.web.http.SessionRepositoryFilter;
+
+class RepositorySecurityFilterTest {
+
+  @Test
+  void repositoryFilterRunsAfterSpringSessionRepositoryFilter() {
+    Order order = RepositorySecurityFilter.class.getAnnotation(Order.class);
+
+    assertEquals(RepositorySecurityFilter.FILTER_ORDER, order.value());
+    assertTrue(order.value() > SessionRepositoryFilter.DEFAULT_ORDER);
+  }
+
+  @Test
+  void readOnlyRequestsUseAnonymousSubjectPermissionsInsteadOfBypassingSecurity() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-public")),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/maven-public/junit/junit/4.13.2/junit-4.13.2.pom"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(1, chain.calls);
+    assertEquals("anonymous", decisions.subject.userId());
+    assertEquals("maven-public", decisions.permission.repository());
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+  }
+
+  @Test
+  void readOnlyAnonymousRequestsAreForbiddenWhenAnonymousRoleLacksPermission() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("missing permission"));
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-public")),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/maven-public/junit/junit/4.13.2/junit-4.13.2.pom"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
+    assertEquals("missing permission", response.message);
+  }
+
+  @Test
+  void writeRequestsDoNotUseAnonymousFallback() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository("maven-public")),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/maven-public/com/acme/app/1.0/app-1.0.jar"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.anonymousCalls);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+  }
+
+  @Test
+  void npmTokenLoginRouteBypassesRepositoryContentPermissionFilter() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("should not be checked"));
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("npm-hosted", RepositoryFormat.NPM)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/npm-hosted/-/user/org.couchdb.user:alice"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.anonymousCalls);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  @Test
+  void browseRestRouteRequiresBrowsePermission() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-public")),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/service/rest/repository/browse/maven-public/junit/junit/"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.BROWSE, decisions.permission.action());
+    assertEquals("junit/junit/", decisions.permission.pathPattern());
+  }
+
+  @Test
+  void repositoryContentRoutesUseNexusBreadActionMapping() throws Exception {
+    assertRepositoryContentAction("GET", PermissionAction.READ);
+    assertRepositoryContentAction("HEAD", PermissionAction.READ);
+    assertRepositoryContentAction("POST", PermissionAction.ADD);
+    assertRepositoryContentAction("PATCH", PermissionAction.ADD);
+    assertRepositoryContentAction("PUT", PermissionAction.EDIT);
+    assertRepositoryContentAction("DELETE", PermissionAction.DELETE);
+  }
+
+  @Test
+  void npmAuditRoutesUseReadPermission() throws Exception {
+    assertNpmAuditRouteUsesReadPermission("-/npm/v1/security/audits");
+    assertNpmAuditRouteUsesReadPermission("-/npm/v1/security/audits/quick");
+    assertNpmAuditRouteUsesReadPermission("-/npm/v1/security/advisories/bulk");
+  }
+
+  private void assertNpmAuditRouteUsesReadPermission(String path) throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("npm-example", RepositoryFormat.NPM)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/npm-example/" + path),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+    assertEquals(path, decisions.permission.pathPattern());
+  }
+
+  @Test
+  void restComponentUploadRequiresRepositoryEditPermission() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-releases")),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/service/rest/v1/components", Map.of("repository", "maven-releases")),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.EDIT, decisions.permission.action());
+    assertEquals("maven-releases", decisions.permission.repository());
+  }
+
+  @Test
+  void nonPostComponentsEndpointIsNotTreatedAsUploadPermission() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("should not be checked"));
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-releases")),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/service/rest/v1/components", Map.of("repository", "maven-releases")),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(0, decisions.decisions);
+    assertEquals(0, response.status);
+  }
+
+  @Test
+  void internalUiComponentUploadRequiresRepositoryEditPermission() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-releases")),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/service/rest/internal/ui/upload/maven-releases"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.EDIT, decisions.permission.action());
+    assertEquals("maven-releases", decisions.permission.repository());
+  }
+
+  private static AuthenticatedSubject subject(String userId) {
+    return new AuthenticatedSubject(
+        "Local",
+        userId,
+        "NexusAuthorizingRealm",
+        null,
+        new PermissionSubject("Local", userId, Set.of("nx-anonymous"), null));
+  }
+
+  private static void assertRepositoryContentAction(String method, PermissionAction action) throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-releases")),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request(method, "/repository/maven-releases/com/acme/app/1.0/app-1.0.jar"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(action, decisions.permission.action());
+  }
+
+  private static RepositoryRecord repository(String name) {
+    return repository(name, RepositoryFormat.MAVEN2);
+  }
+
+  private static RepositoryRecord repository(String name, RepositoryFormat format) {
+    return new RepositoryRecord(
+        1L,
+        name,
+        format,
+        RepositoryType.GROUP,
+        format.name().toLowerCase() + "-group",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of());
+  }
+
+  private static HttpServletRequest request(String method, String uri) {
+    return request(method, uri, Map.of());
+  }
+
+  private static HttpServletRequest request(String method, String uri, Map<String, String> parameters) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    return (HttpServletRequest) Proxy.newProxyInstance(
+        RepositorySecurityFilterTest.class.getClassLoader(),
+        new Class<?>[] {HttpServletRequest.class},
+        (proxy, invoked, args) -> switch (invoked.getName()) {
+          case "getMethod" -> method;
+          case "getRequestURI" -> uri;
+          case "getContextPath" -> "";
+          case "getParameter" -> parameters.get(String.valueOf(args[0]));
+          case "getDispatcherType" -> DispatcherType.REQUEST;
+          case "getAttribute" -> attributes.get(String.valueOf(args[0]));
+          case "setAttribute" -> {
+            attributes.put(String.valueOf(args[0]), args[1]);
+            yield null;
+          }
+          case "removeAttribute" -> {
+            attributes.remove(String.valueOf(args[0]));
+            yield null;
+          }
+          case "toString" -> method + " " + uri;
+          default -> primitiveDefault(invoked.getReturnType());
+        });
+  }
+
+  private static Object primitiveDefault(Class<?> type) {
+    if (boolean.class.equals(type)) {
+      return false;
+    }
+    if (int.class.equals(type) || long.class.equals(type) || short.class.equals(type) || byte.class.equals(type)) {
+      return 0;
+    }
+    if (char.class.equals(type)) {
+      return '\0';
+    }
+    return null;
+  }
+
+  private static class StubAuthenticationService extends SecurityAuthenticationService {
+    private final Optional<AuthenticatedSubject> authenticated;
+    private final AuthenticatedSubject anonymous;
+    private int anonymousCalls;
+
+    private StubAuthenticationService(AuthenticatedSubject anonymous) {
+      this(Optional.empty(), anonymous);
+    }
+
+    private StubAuthenticationService(Optional<AuthenticatedSubject> authenticated) {
+      this(authenticated, null);
+    }
+
+    private StubAuthenticationService(Optional<AuthenticatedSubject> authenticated, AuthenticatedSubject anonymous) {
+      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      this.authenticated = authenticated;
+      this.anonymous = anonymous;
+    }
+
+    @Override
+    public Optional<AuthenticatedSubject> authenticate(HttpServletRequest request) {
+      return authenticated;
+    }
+
+    @Override
+    public Optional<AuthenticatedSubject> authenticateAnonymous(boolean fallbackEnabled) {
+      anonymousCalls++;
+      return fallbackEnabled && anonymous != null ? Optional.of(anonymous) : Optional.empty();
+    }
+  }
+
+  private static class RecordingDecisionService implements com.github.klboke.nexusplus.auth.AccessDecisionService {
+    private final AccessDecision decision;
+    private int decisions;
+    private PermissionSubject subject;
+    private RepositoryPermission permission;
+
+    private RecordingDecisionService(AccessDecision decision) {
+      this.decision = decision;
+    }
+
+    @Override
+    public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+      decisions++;
+      this.subject = subject;
+      this.permission = permission;
+      return decision;
+    }
+  }
+
+  private static class FakeRepositoryDao extends RepositoryDao {
+    private final RepositoryRecord repository;
+
+    private FakeRepositoryDao(RepositoryRecord repository) {
+      super(null, null);
+      this.repository = repository;
+    }
+
+    @Override
+    public Optional<RepositoryRecord> findByName(String name) {
+      return repository.name().equals(name) ? Optional.of(repository) : Optional.empty();
+    }
+  }
+
+  private static class ResponseState {
+    private int status;
+    private String message;
+    private final Map<String, String> headers = new LinkedHashMap<>();
+
+    private HttpServletResponse proxy() {
+      return (HttpServletResponse) Proxy.newProxyInstance(
+          RepositorySecurityFilterTest.class.getClassLoader(),
+          new Class<?>[] {HttpServletResponse.class},
+          (proxy, invoked, args) -> {
+            if ("sendError".equals(invoked.getName())) {
+              status = (Integer) args[0];
+              message = args.length > 1 ? String.valueOf(args[1]) : null;
+              return null;
+            }
+            if ("setHeader".equals(invoked.getName())) {
+              headers.put(String.valueOf(args[0]), String.valueOf(args[1]));
+              return null;
+            }
+            if ("toString".equals(invoked.getName())) {
+              return "ResponseState";
+            }
+            return primitiveDefault(invoked.getReturnType());
+          });
+    }
+  }
+
+  private static class ChainState implements FilterChain {
+    private int calls;
+
+    @Override
+    public void doFilter(jakarta.servlet.ServletRequest request, jakarta.servlet.ServletResponse response) {
+      calls++;
+      assertSame(request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE), request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE));
+    }
+  }
+}

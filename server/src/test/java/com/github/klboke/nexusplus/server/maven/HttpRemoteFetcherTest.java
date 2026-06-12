@@ -1,0 +1,148 @@
+package com.github.klboke.nexusplus.server.maven;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.io.ByteArrayInputStream;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.Map;
+import java.util.Queue;
+import org.junit.jupiter.api.Test;
+
+class HttpRemoteFetcherTest {
+
+  @Test
+  void httpVersionDefaultsToHttp11() {
+    assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion(null));
+    assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion(""));
+    assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion("HTTP_1_1"));
+    assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion("HTTP/1.1"));
+  }
+
+  @Test
+  void httpVersionAllowsHttp2OptIn() {
+    assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("HTTP_2"));
+    assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("http2"));
+    assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("2"));
+  }
+
+  @Test
+  void requestTimeoutUsesSharedProxyDefaults() {
+    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(null, null, "HTTP_1_1", 11, 22, 33, 7, 1);
+
+    assertEquals(
+        Duration.ofSeconds(11),
+        fetcher.requestTimeout(new HttpRemoteFetcher.Request(
+            "https://repo.example/-/v1/search", null, null, null, false)
+            .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.SEARCH)));
+    assertEquals(
+        Duration.ofSeconds(22),
+        fetcher.requestTimeout(new HttpRemoteFetcher.Request(
+            "https://repo.example/maven-metadata.xml", null, null, null, false)
+            .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)));
+    assertEquals(
+        Duration.ofSeconds(33),
+        fetcher.requestTimeout(new HttpRemoteFetcher.Request(
+            "https://repo.example/artifact.jar", null, null, null, false)
+            .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)));
+    assertEquals(
+        Duration.ofSeconds(33),
+        fetcher.requestTimeout(new HttpRemoteFetcher.Request(
+            "https://repo.example/artifact.jar", null, null, null, false)));
+    assertEquals(
+        Duration.ofSeconds(7),
+        fetcher.requestTimeout(new HttpRemoteFetcher.Request(
+            "https://repo.example/artifact.jar", null, null, null, true)));
+    assertEquals(
+        Duration.ofSeconds(9),
+        fetcher.requestTimeout(new HttpRemoteFetcher.Request(
+            "https://repo.example/artifact.jar", null, null, Duration.ofSeconds(9), false)));
+  }
+
+  @Test
+  void bodyReadFailureRetriesFreshGet() throws Exception {
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result("first"),
+        result("second"));
+
+    String body = fetcher.fetchWithBodyRetry(
+        HttpRemoteFetcher.Request.get("https://repo.example/artifact.jar"),
+        "artifact.jar",
+        result -> {
+          if (fetcher.calls == 1) {
+            throw new UpstreamBodyReadException(new EOFException("early EOF"));
+          }
+          return new String(result.body().readAllBytes(), StandardCharsets.UTF_8);
+        });
+
+    assertEquals("second", body);
+    assertEquals(2, fetcher.calls);
+  }
+
+  @Test
+  void handlerIoFailureIsNotBodyRetried() {
+    SequencedFetcher fetcher = new SequencedFetcher(result("{bad-json"), result("{}"));
+    IOException failure = new IOException("bad JSON");
+
+    IOException thrown = assertThrows(IOException.class, () -> fetcher.fetchWithBodyRetry(
+        HttpRemoteFetcher.Request.get("https://repo.example/-/v1/search"),
+        "-/v1/search",
+        result -> {
+          throw failure;
+        }));
+
+    assertSame(failure, thrown);
+    assertEquals(1, fetcher.calls);
+  }
+
+  @Test
+  void uncheckedStorageFailureIsNotBodyRetried() {
+    SequencedFetcher fetcher = new SequencedFetcher(result("artifact"), result("retry"));
+    UncheckedIOException failure = new UncheckedIOException("Failed to upload file to S3", new IOException("s3"));
+
+    UncheckedIOException thrown = assertThrows(UncheckedIOException.class, () -> fetcher.fetchWithBodyRetry(
+        HttpRemoteFetcher.Request.get("https://repo.example/artifact.jar"),
+        "artifact.jar",
+        result -> {
+          throw failure;
+        }));
+
+    assertSame(failure, thrown);
+    assertEquals(1, fetcher.calls);
+  }
+
+  private static HttpRemoteFetcher.Result result(String body) {
+    return new HttpRemoteFetcher.Result(
+        200,
+        Map.of(),
+        new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private static class SequencedFetcher extends HttpRemoteFetcher {
+    private final Queue<HttpRemoteFetcher.Result> results = new ArrayDeque<>();
+    private int calls;
+
+    SequencedFetcher(HttpRemoteFetcher.Result... results) {
+      super(null);
+      for (HttpRemoteFetcher.Result result : results) {
+        this.results.add(result);
+      }
+    }
+
+    @Override
+    public HttpRemoteFetcher.Result fetch(HttpRemoteFetcher.Request req) {
+      calls++;
+      return results.isEmpty()
+          ? new HttpRemoteFetcher.Result(500, Map.of(), InputStream.nullInputStream())
+          : results.remove();
+    }
+  }
+}

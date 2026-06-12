@@ -1,0 +1,128 @@
+.login-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  background: rgba(20, 24, 22, 0.48);
+  padding: 18px;
+}
+
+.login-modal-backdrop[hidden] {
+  display: none !important;
+}
+
+.login-dialog {
+  width: min(100%, 420px);
+  border: 1px solid #cbd4cf;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.26);
+}
+
+.login-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  border-bottom: 1px solid #d8dfdb;
+  padding: 0 16px 0 20px;
+}
+
+.login-dialog-title {
+  margin: 0;
+  color: #2f3b35;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.login-dialog-close {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #4a5650;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.login-dialog-close:hover {
+  background: #edf1ef;
+}
+
+.login-dialog-form {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.login-dialog-form label {
+  display: grid;
+  gap: 6px;
+  color: #68736d;
+  font-weight: 700;
+}
+
+.login-dialog-form input {
+  width: 100%;
+  height: 38px;
+  border: 1px solid #cbd4cf;
+  border-radius: 4px;
+  outline: 0;
+  color: #2f3b35;
+  padding: 0 10px;
+}
+
+.login-dialog-form input:focus {
+  border-color: #2db671;
+  box-shadow: 0 0 0 2px rgba(45, 182, 113, 0.16);
+}
+
+.login-dialog-error {
+  border: 1px solid #efb2b0;
+  border-radius: 4px;
+  background: #fff5f5;
+  color: #9f2622;
+  line-height: 1.35;
+  padding: 9px 10px;
+}
+
+.login-dialog-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.login-dialog-primary,
+.login-dialog-secondary {
+  height: 40px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.login-dialog-primary {
+  border: 1px solid var(--active, #14756b);
+  background: var(--active, #14756b);
+  color: #ffffff;
+}
+
+.login-dialog-primary:hover {
+  border-color: #0f665d;
+  background: #0f665d;
+}
+
+.login-dialog-primary:disabled {
+  border-color: #b8b8b8;
+  background: #d6d9d7;
+  color: #646b67;
+  cursor: not-allowed;
+}
+
+.login-dialog-secondary {
+  border: 1px solid #9ea8a3;
+  background: #ffffff;
+  color: #2f3b35;
+}

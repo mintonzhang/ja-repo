@@ -1,0 +1,362 @@
+package com.github.klboke.nexusplus.server.blob;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.github.klboke.nexusplus.core.BlobFileRegion;
+import jakarta.servlet.http.HttpServletRequest;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.Proxy;
+import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+
+class TempBlobFilesTest {
+  @AfterEach
+  void resetBufferSize() {
+    TempBlobFiles.configureResponseBufferSize(TempBlobFiles.DEFAULT_TRANSFER_BUFFER_SIZE);
+  }
+
+  @Test
+  void transferBufferDefaultsToOneMegabyteAndIsConfigurableWithinBounds() {
+    assertEquals(1024 * 1024, TempBlobFiles.responseBufferSize());
+
+    TempBlobFiles.configureResponseBufferSize(2 * 1024 * 1024);
+    assertEquals(2 * 1024 * 1024, TempBlobFiles.responseBufferSize());
+
+    TempBlobFiles.configureResponseBufferSize(1);
+    assertEquals(8 * 1024, TempBlobFiles.responseBufferSize());
+
+    TempBlobFiles.configureResponseBufferSize(32 * 1024 * 1024);
+    assertEquals(16 * 1024 * 1024, TempBlobFiles.responseBufferSize());
+  }
+
+  @Test
+  void copyResponseUsesFileRegionTransferFastPath() throws Exception {
+    TransferBody body = new TransferBody("fast-path");
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+    TempBlobFiles.copyResponse(body, out);
+
+    assertTrue(body.transferred);
+    assertTrue(body.closed);
+    assertArrayEquals("fast-path".getBytes(StandardCharsets.UTF_8), out.toByteArray());
+  }
+
+  @Test
+  void copyResponseIgnoresClientAbortDuringBufferedWrite() {
+    InputStream body = new ByteArrayInputStream("payload".getBytes(StandardCharsets.UTF_8));
+
+    assertDoesNotThrow(() -> TempBlobFiles.copyResponse(body, new FailingOutputStream("Broken pipe")));
+  }
+
+  @Test
+  void copyResponseLogsClientAbortWithRequestContext() {
+    Map<String, Object> attributes = new HashMap<>();
+    HttpServletRequest request = requestWithAttributes(attributes);
+    InputStream body = new ByteArrayInputStream("payload".getBytes(StandardCharsets.UTF_8));
+
+    assertDoesNotThrow(() -> TempBlobFiles.copyResponse(body, new FailingOutputStream("Broken pipe"), request));
+    assertTrue(TempBlobFiles.hasHandledClientAbort(request));
+  }
+
+  @Test
+  void copyResponseRecordsBytesWrittenBeforeClientAbort() {
+    TempBlobFiles.configureResponseBufferSize(8 * 1024);
+    Map<String, Object> attributes = new HashMap<>();
+    HttpServletRequest request = requestWithAttributes(attributes);
+    byte[] payload = new byte[9 * 1024];
+    InputStream body = new ByteArrayInputStream(payload);
+
+    assertDoesNotThrow(() -> TempBlobFiles.copyResponse(
+        body,
+        new FailingAfterWritesOutputStream(1, "Connection reset by peer"),
+        request));
+
+    assertEquals(8L * 1024, request.getAttribute(TempBlobFiles.RESPONSE_BYTES_WRITTEN_ATTR));
+    assertTrue(request.getAttribute(TempBlobFiles.RESPONSE_COPY_STARTED_AT_NANOS_ATTR) instanceof Long);
+  }
+
+  @Test
+  void copyResponseRecordsBytesWrittenBeforeUncheckedClientAbort() {
+    TempBlobFiles.configureResponseBufferSize(8 * 1024);
+    Map<String, Object> attributes = new HashMap<>();
+    HttpServletRequest request = requestWithAttributes(attributes);
+    byte[] payload = new byte[9 * 1024];
+    InputStream body = new ByteArrayInputStream(payload);
+
+    assertDoesNotThrow(() -> TempBlobFiles.copyResponse(
+        body,
+        new RuntimeFailingAfterWritesOutputStream(1),
+        request));
+
+    assertEquals(8L * 1024, request.getAttribute(TempBlobFiles.RESPONSE_BYTES_WRITTEN_ATTR));
+    assertTrue(TempBlobFiles.hasHandledClientAbort(request));
+  }
+
+  @Test
+  void copyResponseRecordsBytesWrittenBeforeUncheckedFileRegionClientAbort() {
+    Map<String, Object> attributes = new HashMap<>();
+    HttpServletRequest request = requestWithAttributes(attributes);
+    TransferBody body = new TransferBody("payload");
+    body.runtimeFailureAfterBytes = 4;
+    body.runtimeFailure = new IllegalStateException(
+        "ServletOutputStream failed", new IOException("Broken pipe"));
+
+    assertDoesNotThrow(() -> TempBlobFiles.copyResponse(body, new ByteArrayOutputStream(), request));
+
+    assertEquals(4L, request.getAttribute(TempBlobFiles.RESPONSE_BYTES_WRITTEN_ATTR));
+    assertTrue(TempBlobFiles.hasHandledClientAbort(request));
+  }
+
+  @Test
+  void recognizesSpringAsyncClientAbortWrapper() {
+    IOException brokenPipe = new IOException("Broken pipe");
+    AsyncRequestNotUsableException exception =
+        new AsyncRequestNotUsableException("ServletOutputStream failed to write", brokenPipe);
+
+    assertTrue(TempBlobFiles.isClientAbort(exception));
+  }
+
+  @Test
+  void copyResponseIgnoresClientAbortDuringFileRegionTransfer() {
+    TransferBody body = new TransferBody("payload");
+    body.writeFailure = new IOException("Connection reset by peer");
+
+    assertDoesNotThrow(() -> TempBlobFiles.copyResponse(body, new ByteArrayOutputStream()));
+    assertTrue(body.closed);
+  }
+
+  @Test
+  void copyResponsePropagatesNonClientAbortFileRegionFailures() {
+    TransferBody body = new TransferBody("payload");
+    body.writeFailure = new IOException("file read failed");
+
+    IOException thrown = assertThrows(IOException.class,
+        () -> TempBlobFiles.copyResponse(body, new ByteArrayOutputStream()));
+
+    assertEquals("file read failed", thrown.getMessage());
+  }
+
+  @Test
+  void copyResponsePropagatesNonClientAbortWriteFailures() {
+    InputStream body = new ByteArrayInputStream("payload".getBytes(StandardCharsets.UTF_8));
+
+    IOException thrown = assertThrows(IOException.class,
+        () -> TempBlobFiles.copyResponse(body, new FailingOutputStream("disk failed")));
+
+    assertEquals("disk failed", thrown.getMessage());
+  }
+
+  @Test
+  void copyResponsePropagatesReadFailures() {
+    InputStream body = new InputStream() {
+      @Override
+      public int read(byte[] b, int off, int len) throws IOException {
+        throw new IOException("blob read failed");
+      }
+
+      @Override
+      public int read() throws IOException {
+        throw new IOException("blob read failed");
+      }
+    };
+
+    IOException thrown = assertThrows(IOException.class,
+        () -> TempBlobFiles.copyResponse(body, new ByteArrayOutputStream()));
+
+    assertEquals("blob read failed", thrown.getMessage());
+  }
+
+  @Test
+  void tomcatSendfileAttributesUseExclusiveEndAndCloseBody() {
+    Map<String, Object> attributes = new HashMap<>();
+    HttpServletRequest request = requestWithAttributes(attributes);
+    request.setAttribute(TempBlobFiles.TOMCAT_SENDFILE_SUPPORTED_ATTR, Boolean.TRUE);
+    Path path = Path.of("/blob/root/object.bin");
+    TransferBody body = new TransferBody("0123456789", path, 2, 5);
+
+    assertTrue(TempBlobFiles.tryUseTomcatSendfile(request, body));
+
+    assertTrue(body.closed);
+    assertEquals(path.toAbsolutePath().toString(),
+        request.getAttribute(TempBlobFiles.TOMCAT_SENDFILE_FILENAME_ATTR));
+    assertEquals(2L, request.getAttribute(TempBlobFiles.TOMCAT_SENDFILE_FILE_START_ATTR));
+    assertEquals(7L, request.getAttribute(TempBlobFiles.TOMCAT_SENDFILE_FILE_END_ATTR));
+  }
+
+  private static HttpServletRequest requestWithAttributes(Map<String, Object> attributes) {
+    return (HttpServletRequest) Proxy.newProxyInstance(
+        TempBlobFilesTest.class.getClassLoader(),
+        new Class<?>[]{HttpServletRequest.class},
+        (proxy, method, args) -> switch (method.getName()) {
+          case "getAttribute" -> attributes.get((String) args[0]);
+          case "setAttribute" -> {
+            attributes.put((String) args[0], args[1]);
+            yield null;
+          }
+          case "getMethod" -> "GET";
+          case "getRequestURI" -> "/repository/pypi/packages/example.whl";
+          case "getQueryString" -> null;
+          case "getRemoteAddr" -> "127.0.0.1";
+          case "getHeader" -> switch ((String) args[0]) {
+            case "User-Agent" -> "uv/0.11.19";
+            case "X-Forwarded-For" -> "10.0.0.1";
+            case "X-Request-Id" -> "request-1";
+            case "Range" -> "bytes=3-";
+            case "If-Range" -> "\"etag\"";
+            case "X-Envoy-Expected-Rq-Timeout-Ms" -> "15000";
+            default -> null;
+          };
+          default -> defaultValue(method.getReturnType());
+        });
+  }
+
+  private static Object defaultValue(Class<?> returnType) {
+    if (returnType == boolean.class) return false;
+    if (returnType == byte.class) return (byte) 0;
+    if (returnType == short.class) return (short) 0;
+    if (returnType == int.class) return 0;
+    if (returnType == long.class) return 0L;
+    if (returnType == float.class) return 0F;
+    if (returnType == double.class) return 0D;
+    if (returnType == char.class) return '\0';
+    return null;
+  }
+
+  private static final class TransferBody extends InputStream implements BlobFileRegion {
+    private final byte[] payload;
+    private final Path path;
+    private final long position;
+    private final long count;
+    private boolean transferred;
+    private boolean closed;
+    private IOException writeFailure;
+    private int runtimeFailureAfterBytes = -1;
+    private RuntimeException runtimeFailure;
+
+    private TransferBody(String payload) {
+      this(payload, Path.of("/unused"), 0, payload.getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    private TransferBody(String payload, Path path, long position, long count) {
+      this.payload = payload.getBytes(StandardCharsets.UTF_8);
+      this.path = path;
+      this.position = position;
+      this.count = count;
+    }
+
+    @Override
+    public Path path() {
+      return path;
+    }
+
+    @Override
+    public long position() {
+      return position;
+    }
+
+    @Override
+    public long count() {
+      return count;
+    }
+
+    @Override
+    public void transferFileRegionTo(OutputStream out) throws IOException {
+      transferred = true;
+      if (writeFailure != null) {
+        throw writeFailure;
+      }
+      if (runtimeFailure != null) {
+        int bytesBeforeFailure = Math.max(0, Math.min(runtimeFailureAfterBytes, payload.length));
+        out.write(payload, 0, bytesBeforeFailure);
+        throw runtimeFailure;
+      }
+      out.write(payload);
+    }
+
+    @Override
+    public int read() {
+      throw new AssertionError("copyResponse should use transferTo for BlobFileRegion");
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+    }
+  }
+
+  private static final class FailingOutputStream extends OutputStream {
+    private final String message;
+
+    private FailingOutputStream(String message) {
+      this.message = message;
+    }
+
+    @Override
+    public void write(int b) throws IOException {
+      throw new IOException(message);
+    }
+
+    @Override
+    public void write(byte[] b, int off, int len) throws IOException {
+      throw new IOException(message);
+    }
+  }
+
+  private static final class FailingAfterWritesOutputStream extends OutputStream {
+    private final int successfulWrites;
+    private final String message;
+    private int writes;
+
+    private FailingAfterWritesOutputStream(int successfulWrites, String message) {
+      this.successfulWrites = successfulWrites;
+      this.message = message;
+    }
+
+    @Override
+    public void write(int b) throws IOException {
+      write(new byte[]{(byte) b}, 0, 1);
+    }
+
+    @Override
+    public void write(byte[] b, int off, int len) throws IOException {
+      if (writes++ >= successfulWrites) {
+        throw new IOException(message);
+      }
+    }
+  }
+
+  private static final class RuntimeFailingAfterWritesOutputStream extends OutputStream {
+    private final int successfulWrites;
+    private int writes;
+
+    private RuntimeFailingAfterWritesOutputStream(int successfulWrites) {
+      this.successfulWrites = successfulWrites;
+    }
+
+    @Override
+    public void write(int b) throws IOException {
+      write(new byte[]{(byte) b}, 0, 1);
+    }
+
+    @Override
+    public void write(byte[] b, int off, int len) throws IOException {
+      if (writes++ >= successfulWrites) {
+        throw new IllegalStateException(
+            "ServletOutputStream failed to write", new IOException("Broken pipe"));
+      }
+    }
+  }
+}

@@ -1,0 +1,466 @@
+package com.github.klboke.nexusplus.server.npm;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.nexusplus.core.BlobObjectMetadata;
+import com.github.klboke.nexusplus.core.BlobReference;
+import com.github.klboke.nexusplus.core.BlobStorage;
+import com.github.klboke.nexusplus.core.RepositoryFormat;
+import com.github.klboke.nexusplus.core.RepositoryType;
+import com.github.klboke.nexusplus.persistence.mysql.dao.AssetDao;
+import com.github.klboke.nexusplus.persistence.mysql.dao.BrowseNodeDao;
+import com.github.klboke.nexusplus.persistence.mysql.dao.ComponentDao;
+import com.github.klboke.nexusplus.persistence.mysql.dao.RepositoryDao;
+import com.github.klboke.nexusplus.persistence.mysql.model.AssetBlobRecord;
+import com.github.klboke.nexusplus.persistence.mysql.model.AssetRecord;
+import com.github.klboke.nexusplus.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.nexusplus.persistence.mysql.support.HashColumns;
+import com.github.klboke.nexusplus.protocol.npm.NpmPackageId;
+import com.github.klboke.nexusplus.protocol.npm.NpmPath;
+import com.github.klboke.nexusplus.server.cache.AssetMetadataCache;
+import com.github.klboke.nexusplus.server.cache.NexusLikeCacheController;
+import com.github.klboke.nexusplus.server.maven.BlobStorageRegistry;
+import com.github.klboke.nexusplus.server.maven.MavenResponse;
+import com.github.klboke.nexusplus.server.maven.RepositoryRuntime;
+import com.github.klboke.nexusplus.server.support.InMemorySharedCache;
+import com.github.klboke.nexusplus.server.support.InMemoryVersionWatermark;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import org.junit.jupiter.api.Test;
+
+class NpmGroupServiceCacheTest {
+
+  @Test
+  void mergedPackageRootIsServedFromGroupBlobCacheOnRepeatedReads() throws IOException {
+    Fixture fixture = fixture();
+    fixture.repositories.putGroupsContaining(101L, List.of(record(999L, "npm-group")));
+    NpmGroupService groupService = fixture.groupService();
+
+    RepositoryRuntime member = runtime(101L, "npm-hosted", RepositoryType.HOSTED, List.of());
+    RepositoryRuntime group = runtime(999L, "npm-group", RepositoryType.GROUP, List.of(member));
+    NpmPackageId packageId = NpmPackageId.parse("@example/demo");
+    NpmPath path = new NpmPath(NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId,
+        null, null, null, null);
+
+    MavenResponse first = groupService.get(group, path, "http://nexus/group", false);
+    MavenResponse second = groupService.get(group, path, "http://nexus/group", false);
+
+    assertEquals(1, fixture.hosted.calls.get(), "second read must skip member fan-out");
+    assertEquals(1, fixture.storage.puts.get(), "merged packument should be written once to blob storage");
+    assertTrue(fixture.assets.findAssetByPath(group.id(), packageId.id()).isPresent(),
+        "group repository must own a cached package-root asset");
+    String firstBody = body(first);
+    String secondBody = body(second);
+    assertEquals(firstBody, secondBody);
+    assertTrue(firstBody.contains("\"http://nexus/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""),
+        "tarball URL must be rewritten with the request base URL: " + firstBody);
+  }
+
+  @Test
+  void cachedBlobIsSharedAcrossBaseUrlsAndResponseUrlIsRewritten() throws IOException {
+    Fixture fixture = fixture();
+    NpmGroupService groupService = fixture.groupService();
+
+    RepositoryRuntime member = runtime(11L, "npm-hosted", RepositoryType.HOSTED, List.of());
+    RepositoryRuntime group = runtime(12L, "npm-group", RepositoryType.GROUP, List.of(member));
+    NpmPackageId packageId = NpmPackageId.parse("@example/demo");
+    NpmPath path = new NpmPath(NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId,
+        null, null, null, null);
+
+    String internal = body(groupService.get(group, path, "http://internal/group", false));
+    String external = body(groupService.get(group, path, "http://external/group", false));
+    groupService.get(group, path, "http://internal/group", false);
+
+    assertEquals(1, fixture.hosted.calls.get(),
+        "base URL changes must not create separate packument cache entries");
+    assertTrue(internal.contains("\"http://internal/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""));
+    assertTrue(external.contains("\"http://external/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""));
+  }
+
+  @Test
+  void installV1PackageRootIsAbbreviatedAndCachedSeparately() throws IOException {
+    Fixture fixture = fixture();
+    NpmGroupService groupService = fixture.groupService();
+
+    RepositoryRuntime member = runtime(11L, "npm-hosted", RepositoryType.HOSTED, List.of());
+    RepositoryRuntime group = runtime(12L, "npm-group", RepositoryType.GROUP, List.of(member));
+    NpmPackageId packageId = NpmPackageId.parse("@example/demo");
+    NpmPath path = new NpmPath(NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId,
+        null, null, null, null);
+
+    String installBody = body(groupService.get(
+        group, path, "http://nexus/group", false, NpmPackumentVariant.INSTALL_V1));
+    String installBodySecond = body(groupService.get(
+        group, path, "http://nexus/group", false, NpmPackumentVariant.INSTALL_V1));
+    String fullBody = body(groupService.get(group, path, "http://nexus/group", false));
+
+    assertEquals(1, fixture.hosted.calls.get(),
+        "install-v1 and full reads should reuse the cached merged full packument");
+    assertEquals(2, fixture.storage.puts.get(),
+        "first install-v1 read should store one full blob and one abbreviated blob");
+    assertTrue(fixture.assets.findAssetByPath(group.id(), packageId.id()).isPresent());
+    assertTrue(fixture.assets.findAssetByPath(
+        group.id(), NpmPackumentVariant.INSTALL_V1.cachePath(packageId)).isPresent());
+    assertEquals(installBody, installBodySecond);
+    assertFalse(installBody.contains("\"readme\""), installBody);
+    assertFalse(installBody.contains("\"scripts\""), installBody);
+    assertTrue(installBody.contains("\"hasInstallScript\":true"), installBody);
+    assertTrue(installBody.contains("\"dependencies\""), installBody);
+    assertTrue(installBody.contains("\"http://nexus/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""));
+    assertTrue(fullBody.contains("\"readme\""), fullBody);
+    assertTrue(fullBody.contains("\"scripts\""), fullBody);
+  }
+
+  @Test
+  void memberPackageInvalidationRebuildsCachedBlob() {
+    Fixture fixture = fixture();
+    fixture.repositories.putGroupsContaining(101L, List.of(record(999L, "npm-group")));
+    NpmGroupService groupService = fixture.groupService();
+
+    RepositoryRuntime member = runtime(101L, "npm-hosted", RepositoryType.HOSTED, List.of());
+    RepositoryRuntime group = runtime(999L, "npm-group", RepositoryType.GROUP, List.of(member));
+    NpmPackageId packageId = NpmPackageId.parse("@example/demo");
+    NpmPath path = new NpmPath(NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId,
+        null, null, null, null);
+
+    groupService.get(group, path, "http://nexus/group", false);
+    fixture.packumentCache.invalidateMemberPackageAfterCommit(member.id(), packageId.id());
+    groupService.get(group, path, "http://nexus/group", false);
+
+    assertEquals(2, fixture.hosted.calls.get(), "invalidated package root must fan out again");
+    assertEquals(2, fixture.storage.puts.get(), "rebuilt package root must replace the cached blob");
+  }
+
+  @Test
+  void tarballMissesWhenOnlyGroupMemberHasBadUpstream() {
+    Fixture fixture = fixture();
+    NpmGroupService groupService = fixture.groupServiceWithProxy(new FailingNpmProxyService());
+
+    NpmPackageId packageId = NpmPackageId.parse("@example/forge-tokens");
+    NpmPath path = new NpmPath(NpmPath.Kind.TARBALL, packageId.tarballPath("forge-tokens-0.2.0.tgz"),
+        packageId, null, "forge-tokens-0.2.0.tgz", null, null);
+    RepositoryRuntime proxy = runtime(101L, "npm-proxy", RepositoryType.PROXY, List.of());
+    RepositoryRuntime group = runtime(999L, "npm-group", RepositoryType.GROUP, List.of(proxy));
+
+    NpmExceptions.NpmNotFoundException error = assertThrows(
+        NpmExceptions.NpmNotFoundException.class,
+        () -> groupService.get(group, path, "http://nexus/group", false));
+
+    assertEquals(packageId.tarballPath("forge-tokens-0.2.0.tgz"), error.getMessage());
+  }
+
+  private static Fixture fixture() {
+    ObjectMapper mapper = new ObjectMapper();
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    InMemoryAssetDao assets = new InMemoryAssetDao();
+    InMemoryBlobStorage storage = new InMemoryBlobStorage();
+    AssetMetadataCache assetMetadataCache = new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0);
+    NexusLikeCacheController cacheController = new NexusLikeCacheController(new InMemoryVersionWatermark(), 60);
+    NpmGroupPackumentCache packumentCache =
+        new NpmGroupPackumentCache(repositories, assets, assetMetadataCache, cacheController, true);
+    NpmAssetWriter writer = new NpmAssetWriter(
+        assets,
+        new NoopComponentDao(),
+        new NoopBrowseNodeDao(),
+        null,
+        assetMetadataCache,
+        packumentCache,
+        null);
+    RecordingNpmHostedService hosted = new RecordingNpmHostedService();
+    BlobStorageRegistry registry = new SingleBlobStorageRegistry(storage);
+    return new Fixture(mapper, repositories, assets, storage, packumentCache, writer, hosted, registry);
+  }
+
+  private static String body(MavenResponse response) throws IOException {
+    try (InputStream in = response.body()) {
+      return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    }
+  }
+
+  private static RepositoryRuntime runtime(
+      long id, String name, RepositoryType type, List<RepositoryRuntime> members) {
+    return new RepositoryRuntime(
+        id, name, RepositoryFormat.NPM, type, "npm-" + type.name().toLowerCase(),
+        true, 1L, "ALLOW", null, null, true, null, null, 60,
+        null, null, members);
+  }
+
+  private static RepositoryRecord record(long id, String name) {
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.NPM, RepositoryType.GROUP,
+        "npm-group", true, 1L, null, null, null, null, "ALLOW", false, Map.of());
+  }
+
+  private record Fixture(
+      ObjectMapper mapper,
+      StubRepositoryDao repositories,
+      InMemoryAssetDao assets,
+      InMemoryBlobStorage storage,
+      NpmGroupPackumentCache packumentCache,
+      NpmAssetWriter writer,
+      RecordingNpmHostedService hosted,
+      BlobStorageRegistry registry) {
+    NpmGroupService groupService() {
+      return new NpmGroupService(hosted, null, mapper, packumentCache, null, registry, writer);
+    }
+
+    NpmGroupService groupServiceWithProxy(NpmProxyService proxy) {
+      return new NpmGroupService(hosted, proxy, mapper, packumentCache, null, registry, writer);
+    }
+  }
+
+  private static class RecordingNpmHostedService extends NpmHostedService {
+    final AtomicInteger calls = new AtomicInteger();
+
+    RecordingNpmHostedService() {
+      super(null, null, null, new ObjectMapper(), null);
+    }
+
+    @Override
+    public MavenResponse get(
+        RepositoryRuntime runtime, NpmPath path, String repositoryBaseUrl, boolean headOnly) {
+      return get(runtime, path, repositoryBaseUrl, headOnly, NpmPackumentVariant.FULL);
+    }
+
+    @Override
+    public MavenResponse get(
+        RepositoryRuntime runtime,
+        NpmPath path,
+        String repositoryBaseUrl,
+        boolean headOnly,
+        NpmPackumentVariant variant) {
+      calls.incrementAndGet();
+      String body = """
+          {
+            "name": "@example/demo",
+            "_id": "@example/demo",
+            "readme": "large readme",
+            "versions": {
+              "1.0.0": {
+                "name": "@example/demo",
+                "version": "1.0.0",
+                "readme": "large version readme",
+                "scripts": {
+                  "install": "node install.js"
+                },
+                "dependencies": {
+                  "left-pad": "^1.3.0"
+                },
+                "dist": {
+                  "tarball": "https://upstream.example/demo-1.0.0.tgz",
+                  "shasum": "0000000000000000000000000000000000000000"
+                }
+              }
+            }
+          }""";
+      byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+      return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
+          NpmResponseSupport.JSON, null, Instant.now());
+    }
+  }
+
+  private static class FailingNpmProxyService extends NpmProxyService {
+    FailingNpmProxyService() {
+      super(null, null, null, null, null, null, null, null, null, null);
+    }
+
+    @Override
+    public MavenResponse get(
+        RepositoryRuntime runtime, NpmPath path, String repositoryBaseUrl, boolean headOnly) {
+      throw new NpmExceptions.BadUpstreamException("Upstream returned 502");
+    }
+  }
+
+  private static class StubRepositoryDao extends RepositoryDao {
+    private final Map<Long, List<RepositoryRecord>> groupsByMember = new HashMap<>();
+
+    StubRepositoryDao() {
+      super(null, null);
+    }
+
+    void putGroupsContaining(long memberId, List<RepositoryRecord> groups) {
+      groupsByMember.put(memberId, groups);
+    }
+
+    @Override
+    public List<RepositoryRecord> listGroupsContaining(long memberRepositoryId) {
+      return groupsByMember.getOrDefault(memberRepositoryId, List.of());
+    }
+  }
+
+  private static class InMemoryAssetDao extends AssetDao {
+    private final AtomicLong blobIds = new AtomicLong(200);
+    private final AtomicLong assetIds = new AtomicLong(100);
+    private final Map<Long, AssetBlobRecord> blobs = new ConcurrentHashMap<>();
+    private final Map<String, AssetRecord> assets = new ConcurrentHashMap<>();
+
+    InMemoryAssetDao() {
+      super(null, null);
+    }
+
+    @Override
+    public Optional<AssetBlobRecord> findReusableBlobBySha256(long blobStoreId, String sha256, long size) {
+      return Optional.empty();
+    }
+
+    @Override
+    public long insertBlob(AssetBlobRecord record) {
+      long id = blobIds.incrementAndGet();
+      blobs.put(id, withId(record, id));
+      return id;
+    }
+
+    @Override
+    public Optional<AssetBlobRecord> findBlobById(long assetBlobId) {
+      return Optional.ofNullable(blobs.get(assetBlobId));
+    }
+
+    @Override
+    public Optional<AssetRecord> findAssetByPath(long repositoryId, String path) {
+      return Optional.ofNullable(assets.get(key(repositoryId, path)));
+    }
+
+    @Override
+    public OptionalLong tryInsertAsset(AssetRecord record) {
+      String key = key(record.repositoryId(), record.path());
+      if (assets.containsKey(key)) {
+        return OptionalLong.empty();
+      }
+      long id = assetIds.incrementAndGet();
+      assets.put(key, withId(record, id));
+      return OptionalLong.of(id);
+    }
+
+    @Override
+    public int updateAssetBlobBindingAndMetadata(long assetId, Long componentId, long assetBlobId,
+        String kind, String contentType, long size, Instant lastUpdatedAt, Map<String, Object> attributes) {
+      assets.replaceAll((ignored, prior) -> prior.id() == assetId
+          ? new AssetRecord(
+              prior.id(), prior.repositoryId(), componentId, assetBlobId, prior.format(),
+              prior.path(), prior.pathHash(), prior.name(), kind, contentType, size,
+              prior.lastDownloadedAt(), lastUpdatedAt, attributes)
+          : prior);
+      return 1;
+    }
+
+    @Override
+    public int updateAssetAttributes(long assetId, Map<String, Object> attributes) {
+      assets.replaceAll((ignored, prior) -> prior.id() == assetId
+          ? new AssetRecord(
+              prior.id(), prior.repositoryId(), prior.componentId(), prior.assetBlobId(),
+              prior.format(), prior.path(), prior.pathHash(), prior.name(), prior.kind(),
+              prior.contentType(), prior.size(), prior.lastDownloadedAt(), prior.lastUpdatedAt(),
+              attributes)
+          : prior);
+      return 1;
+    }
+
+    @Override
+    public int markBlobDeletedIfUnreferenced(long assetBlobId, String reason) {
+      return 1;
+    }
+
+    private static AssetBlobRecord withId(AssetBlobRecord record, long id) {
+      return new AssetBlobRecord(
+          id, record.blobStoreId(), record.blobRef(), record.blobRefHash(),
+          record.objectKey(), record.objectKeyHash(), record.sha1(), record.sha256(),
+          record.md5(), record.size(), record.contentType(), record.createdBy(),
+          record.createdByIp(), record.blobCreatedAt(), record.blobUpdatedAt(),
+          record.attributes());
+    }
+
+    private static AssetRecord withId(AssetRecord record, long id) {
+      return new AssetRecord(
+          id, record.repositoryId(), record.componentId(), record.assetBlobId(),
+          record.format(), record.path(), HashColumns.pathHash(record.path()), record.name(),
+          record.kind(), record.contentType(), record.size(), record.lastDownloadedAt(),
+          record.lastUpdatedAt(), record.attributes());
+    }
+
+    private static String key(long repositoryId, String path) {
+      return repositoryId + ":" + path;
+    }
+  }
+
+  private static class InMemoryBlobStorage implements BlobStorage {
+    private final AtomicInteger puts = new AtomicInteger();
+    private final Map<String, byte[]> objects = new ConcurrentHashMap<>();
+
+    @Override
+    public BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256) {
+      try {
+        String objectKey = "objects/" + puts.incrementAndGet();
+        objects.put(objectKey, content.readAllBytes());
+        return new BlobReference("default", objectKey, sha256, size);
+      } catch (IOException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+
+    @Override
+    public Optional<InputStream> get(BlobReference reference) {
+      byte[] bytes = objects.get(reference.objectKey());
+      return bytes == null ? Optional.empty() : Optional.of(new ByteArrayInputStream(bytes));
+    }
+
+    @Override
+    public boolean exists(BlobReference reference) {
+      return objects.containsKey(reference.objectKey());
+    }
+
+    @Override
+    public Optional<BlobObjectMetadata> stat(BlobReference reference) {
+      return Optional.empty();
+    }
+
+    @Override
+    public void delete(BlobReference reference) {
+      objects.remove(reference.objectKey());
+    }
+  }
+
+  private static class SingleBlobStorageRegistry extends BlobStorageRegistry {
+    private final BlobStorage storage;
+
+    SingleBlobStorageRegistry(BlobStorage storage) {
+      super(null, null, null, null, false);
+      this.storage = storage;
+    }
+
+    @Override
+    public BlobStorage forBlobStoreId(long blobStoreId) {
+      return storage;
+    }
+  }
+
+  private static class NoopBrowseNodeDao extends BrowseNodeDao {
+    NoopBrowseNodeDao() {
+      super(null);
+    }
+
+    @Override
+    public void upsertPathAncestors(long repositoryId, String fullPath, Long assetId, Long componentId) {
+    }
+  }
+
+  private static class NoopComponentDao extends ComponentDao {
+    NoopComponentDao() {
+      super(null, null);
+    }
+  }
+}
