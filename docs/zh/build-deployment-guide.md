@@ -16,10 +16,27 @@
 如果只是想快速体验，可以用公开发行镜像一条命令拉起 nexus-plus 和 MySQL：
 
 ```bash
-mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/docker-compose.quickstart.yml && docker compose -f docker-compose.quickstart.yml up -d
+curl -fsSL https://raw.githubusercontent.com/klboke/nexus-plus/main/scripts/quickstart.sh | bash
 ```
 
-该命令会下载 `docker-compose.quickstart.yml`，启动：
+该脚本会逐步打印日志并执行：
+
+1. 检查 Docker、Docker Compose 和 curl。
+2. 创建 `nexus-plus-quickstart/` 工作目录。
+3. 生成 `.env`，保存镜像 tag、端口和本地试用密钥。
+4. 下载 `docker-compose.quickstart.yml`。
+5. 检查宿主机端口占用。
+6. 拉取镜像并执行 `docker compose up -d`。
+7. 等待 `/actuator/health` 返回 `UP`，然后打印访问地址和常用命令。
+
+如果希望先检查脚本内容，可以改用两步执行：
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/scripts/quickstart.sh
+bash quickstart.sh
+```
+
+默认会启动：
 
 - `ghcr.io/klboke/nexus-plus:0.1.0`
 - MySQL 8.0
@@ -46,7 +63,13 @@ docker compose -f docker-compose.quickstart.yml down
 docker compose -f docker-compose.quickstart.yml down -v
 ```
 
-quickstart compose 内置的加密密钥仅用于本地试用。对外部署时必须替换 `NEXUS_PLUS_CREDENTIAL_SECRET` 和 `NEXUS_PLUS_API_KEY_PAYLOAD_SECRET`，并使用独立 MySQL 与 OSS/S3 blob store。
+脚本生成的 `.env` 加密密钥仅用于本地试用。对外部署时必须替换 `NEXUS_PLUS_CREDENTIAL_SECRET` 和 `NEXUS_PLUS_API_KEY_PAYLOAD_SECRET`，并使用独立 MySQL 与 OSS/S3 blob store。
+
+如果默认端口被占用，可以覆盖端口后启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/nexus-plus/main/scripts/quickstart.sh | NEXUS_PLUS_HTTP_PORT=19190 NEXUS_PLUS_MANAGEMENT_PORT=19191 bash
+```
 
 ## 源码本地快速启动
 
