@@ -18,7 +18,7 @@
 使用公开发行镜像和 MySQL 在本地启动一个试用环境：
 
 ```bash
-mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/docker-compose.quickstart.yml && docker compose -f docker-compose.quickstart.yml up -d
+curl -fsSL https://raw.githubusercontent.com/klboke/nexus-plus/main/scripts/quickstart.sh | bash
 ```
 
 启动后访问：
@@ -28,6 +28,8 @@ mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https:
 - 健康检查：`http://127.0.0.1:19091/actuator/health`
 
 首次进入页面时，在 UI 中创建初始 `Local/admin` 管理员密码。quickstart 使用 File blob storage 作为本地试用存储；生产环境请改用 OSS/S3，并替换为自己的加密密钥。
+
+如果希望先检查脚本内容，可以先下载 `scripts/quickstart.sh`，确认后再用 `bash` 执行。
 
 ## 构建和部署
 

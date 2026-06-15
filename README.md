@@ -20,7 +20,7 @@ The project keeps Nexus-compatible client protocols, the Nexus permission/authen
 Start a local trial environment with the public release image and MySQL:
 
 ```bash
-mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/docker-compose.quickstart.yml && docker compose -f docker-compose.quickstart.yml up -d
+curl -fsSL https://raw.githubusercontent.com/klboke/nexus-plus/main/scripts/quickstart.sh | bash
 ```
 
 Open:
@@ -30,6 +30,8 @@ Open:
 - Health check: `http://127.0.0.1:19091/actuator/health`
 
 On the first visit, create the initial `Local/admin` administrator password in the UI. The quickstart uses File blob storage for local trials; use OSS/S3 and your own encryption secrets for production.
+
+If you prefer to inspect the script before running it, download `scripts/quickstart.sh` first and then run it with `bash`.
 
 ## Build And Deployment
 
