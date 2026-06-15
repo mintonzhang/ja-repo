@@ -11,7 +11,44 @@ This document covers local startup, release builds, archive package deployment, 
 
 The service requires MySQL at runtime. For local trials, the blob store can use File storage. For production, OSS/S3 is recommended.
 
-## Local Quick Start
+## Docker Compose Quick Trial
+
+For a quick local trial, start nexus-plus and MySQL with the public release image:
+
+```bash
+mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/docker-compose.quickstart.yml && docker compose -f docker-compose.quickstart.yml up -d
+```
+
+This command downloads `docker-compose.quickstart.yml` and starts:
+
+- `ghcr.io/klboke/nexus-plus:0.1.0`
+- MySQL 8.0
+- Persistent MySQL and File blob storage volumes for local trials
+
+After startup, open:
+
+- Admin console: `http://127.0.0.1:19090/admin/`
+- User browser: `http://127.0.0.1:19090/browse/`
+- Health check: `http://127.0.0.1:19091/actuator/health`
+- Prometheus metrics: `http://127.0.0.1:19091/actuator/prometheus`
+
+On the first visit, create the initial `Local/admin` administrator password in the UI. After entering the admin console, create a blob store named `default`. File is fine for local trials; OSS/S3 is recommended for production.
+
+Stop the trial environment:
+
+```bash
+docker compose -f docker-compose.quickstart.yml down
+```
+
+Remove all trial data:
+
+```bash
+docker compose -f docker-compose.quickstart.yml down -v
+```
+
+The encryption secrets bundled in the quickstart compose file are only for local trials. For externally reachable deployments, replace `NEXUS_PLUS_CREDENTIAL_SECRET` and `NEXUS_PLUS_API_KEY_PAYLOAD_SECRET`, and use an independent MySQL instance plus OSS/S3 blob storage.
+
+## Source Local Quick Start
 
 Create a local database and account:
 
@@ -63,6 +100,18 @@ server/target/nexus-plus-server-<version>.jar
 Note: a normal `server` module jar does not contain a Spring Boot executable entrypoint. Before copying or deploying `server/target/nexus-plus-server-*.jar`, run `spring-boot:repackage`.
 
 ## Docker Image
+
+Pull the first public release image:
+
+```bash
+docker pull ghcr.io/klboke/nexus-plus:0.1.0
+```
+
+You can also use `latest` to follow the latest public release:
+
+```bash
+docker pull ghcr.io/klboke/nexus-plus:latest
+```
 
 Build the default image:
 

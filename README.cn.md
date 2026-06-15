@@ -13,6 +13,22 @@
 - `/admin/` 下的轻量运维管理控制台
 - `/browse/` 下的用户侧仓库浏览器
 
+## 快速开始
+
+使用公开发行镜像和 MySQL 在本地启动一个试用环境：
+
+```bash
+mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/docker-compose.quickstart.yml && docker compose -f docker-compose.quickstart.yml up -d
+```
+
+启动后访问：
+
+- 管理控制台：`http://127.0.0.1:19090/admin/`
+- 用户侧浏览器：`http://127.0.0.1:19090/browse/`
+- 健康检查：`http://127.0.0.1:19091/actuator/health`
+
+首次进入页面时，在 UI 中创建初始 `Local/admin` 管理员密码。quickstart 使用 File blob storage 作为本地试用存储；生产环境请改用 OSS/S3，并替换为自己的加密密钥。
+
 ## 构建和部署
 
 本地快速启动、Spring Boot 可执行 jar、Docker 镜像、压缩包、生产部署架构、资源规格和升级流程见 [构建部署指南](docs/zh/build-deployment-guide.md)。

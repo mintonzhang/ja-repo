@@ -1,0 +1,51 @@
+name: nexus-plus-quickstart
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: nexus_plus_root
+      MYSQL_DATABASE: nexus_plus
+      MYSQL_USER: nexus_plus
+      MYSQL_PASSWORD: nexus_plus
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  app-data-perms:
+    image: alpine:3.20
+    user: root
+    volumes:
+      - nexus-plus-data:/data
+    command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 999:999 /data"]
+
+  nexus-plus:
+    image: ghcr.io/klboke/nexus-plus:0.1.0
+    depends_on:
+      mysql:
+        condition: service_healthy
+      app-data-perms:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/nexus_plus?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: nexus_plus
+      SPRING_DATASOURCE_PASSWORD: nexus_plus
+      NEXUS_PLUS_CREDENTIAL_SECRET: quickstart-credential-secret-change-me-0123456789
+      NEXUS_PLUS_API_KEY_PAYLOAD_SECRET: quickstart-api-key-payload-secret-change-me-0123456789
+      NEXUS_PLUS_FILE_BASE_DIR: /var/lib/nexus-plus/blobs
+    ports:
+      - "19090:8080"
+      - "19091:8081"
+    volumes:
+      - nexus-plus-data:/var/lib/nexus-plus
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  nexus-plus-data:

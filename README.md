@@ -15,6 +15,22 @@ The project keeps Nexus-compatible client protocols, the Nexus permission/authen
 - Lightweight operations console under `/admin/`
 - User-facing repository browser under `/browse/`
 
+## Quick Start
+
+Start a local trial environment with the public release image and MySQL:
+
+```bash
+mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/docker-compose.quickstart.yml && docker compose -f docker-compose.quickstart.yml up -d
+```
+
+Open:
+
+- Admin console: `http://127.0.0.1:19090/admin/`
+- User browser: `http://127.0.0.1:19090/browse/`
+- Health check: `http://127.0.0.1:19091/actuator/health`
+
+On the first visit, create the initial `Local/admin` administrator password in the UI. The quickstart uses File blob storage for local trials; use OSS/S3 and your own encryption secrets for production.
+
 ## Build And Deployment
 
 Local quick start, Spring Boot executable jar, Docker image, archive package, production deployment architecture, resource sizing, and upgrade flow are documented in the [Build And Deployment Guide](docs/es/build-deployment-guide.md).
