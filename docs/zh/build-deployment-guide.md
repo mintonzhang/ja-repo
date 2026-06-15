@@ -11,7 +11,44 @@
 
 服务运行时依赖 MySQL。blob store 本地试用可以使用 File，生产环境建议使用 OSS/S3。
 
-## 本地快速启动
+## Docker Compose 快速试用
+
+如果只是想快速体验，可以用公开发行镜像一条命令拉起 nexus-plus 和 MySQL：
+
+```bash
+mkdir -p nexus-plus-quickstart && cd nexus-plus-quickstart && curl -fsSLO https://raw.githubusercontent.com/klboke/nexus-plus/main/docker-compose.quickstart.yml && docker compose -f docker-compose.quickstart.yml up -d
+```
+
+该命令会下载 `docker-compose.quickstart.yml`，启动：
+
+- `ghcr.io/klboke/nexus-plus:0.1.0`
+- MySQL 8.0
+- 用于本地试用的持久化 MySQL volume 和 File blob storage volume
+
+启动后访问：
+
+- 管理控制台：`http://127.0.0.1:19090/admin/`
+- 用户侧浏览器：`http://127.0.0.1:19090/browse/`
+- 健康检查：`http://127.0.0.1:19091/actuator/health`
+- Prometheus 指标：`http://127.0.0.1:19091/actuator/prometheus`
+
+首次进入页面时，在 UI 中创建初始 `Local/admin` 管理员密码。进入管理控制台后，先创建名为 `default` 的 blob store；本地试用可以选择 File，生产环境建议使用 OSS/S3。
+
+停止试用环境：
+
+```bash
+docker compose -f docker-compose.quickstart.yml down
+```
+
+清空试用数据：
+
+```bash
+docker compose -f docker-compose.quickstart.yml down -v
+```
+
+quickstart compose 内置的加密密钥仅用于本地试用。对外部署时必须替换 `NEXUS_PLUS_CREDENTIAL_SECRET` 和 `NEXUS_PLUS_API_KEY_PAYLOAD_SECRET`，并使用独立 MySQL 与 OSS/S3 blob store。
+
+## 源码本地快速启动
 
 创建本地数据库和账号：
 
@@ -63,6 +100,18 @@ server/target/nexus-plus-server-<version>.jar
 注意：普通 `server` 模块 jar 没有 Spring Boot 可执行入口。需要复制或部署 `server/target/nexus-plus-server-*.jar` 时，必须先执行 `spring-boot:repackage`。
 
 ## Docker 镜像
+
+拉取首个公开发行镜像：
+
+```bash
+docker pull ghcr.io/klboke/nexus-plus:0.1.0
+```
+
+也可以使用 `latest` 跟随最新公开发行版本：
+
+```bash
+docker pull ghcr.io/klboke/nexus-plus:latest
+```
 
 构建默认镜像：
 
