@@ -1,5 +1,11 @@
 # nexus-plus
 
+[![CI](https://github.com/klboke/nexus-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/klboke/nexus-plus/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/klboke/nexus-plus)](https://github.com/klboke/nexus-plus/releases)
+[![License](https://img.shields.io/github/license/klboke/nexus-plus)](LICENSE)
+[![Container](https://img.shields.io/badge/ghcr.io-nexus--plus-blue)](https://github.com/klboke/nexus-plus/pkgs/container/nexus-plus)
+[![Security Policy](https://img.shields.io/badge/security-policy-green)](SECURITY.md)
+
 [Chinese version](README.cn.md)
 
 `nexus-plus` is a Nexus-compatible, self-hosted artifact repository for Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and Raw artifacts.
@@ -143,15 +149,19 @@ Planned repository format iterations:
 6. Conda
 7. Composer / PHP
 
+Protocol and client compatibility backlog:
+
+- RubyGems Bearer/API-key credential examples after client compatibility is verified.
+
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, PR expectations, compatibility testing expectations, and multi-replica design constraints.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, PR expectations, compatibility testing expectations, and multi-replica design constraints. Community behavior expectations are documented in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 Local development and testing are documented in the [Development Guide](docs/en/development-guide.md). Build and deployment are documented in the [Build And Deployment Guide](docs/en/build-deployment-guide.md). AI agent and contributor constraints are in [AGENTS.md](AGENTS.md).
 
 ## Support
 
-Join the [nexus-plus Telegram group](https://t.me/+M6prtFUGnF9kYTU1) for community support and usage discussion.
+Join the [nexus-plus Telegram group](https://t.me/+M6prtFUGnF9kYTU1) for community support and usage discussion. See [SUPPORT.md](SUPPORT.md) for issue routing, support scope, and security-reporting boundaries.
 
 ## Security
 
@@ -165,8 +175,18 @@ nexus-plus is open sourced under the [Apache License 2.0](LICENSE).
 
 - [Development Guide](docs/en/development-guide.md)
 - [Build And Deployment Guide](docs/en/build-deployment-guide.md)
+- [Client Recipes](docs/en/client-recipes.md)
+- [Architecture](docs/en/architecture.md)
+- [Compatibility Matrix](docs/en/compatibility-matrix.md)
+- [Troubleshooting Guide](docs/en/troubleshooting.md)
+- [Production Hardening Guide](docs/en/production-hardening.md)
+- [Backup And Restore Guide](docs/en/backup-restore.md)
+- [Security Model](docs/en/security-model.md)
 - [MySQL ER Design](docs/en/mysql-er.md)
 - [Nexus Migration Guide](docs/en/nexus-migration-guide.md)
+- [Nexus Migration Playbook](docs/en/migration-playbook.md)
 - [Monitoring And Observability Guide](docs/en/monitoring-observability-guide.md)
 - [Nexus Compatibility Testing](docs/en/nexus-compatibility-testing.md)
+- [FAQ](docs/en/faq.md)
 - [Why We Built nexus-plus To Replace Nexus](docs/en/why-nexus-plus.md)
+- [Changelog](CHANGELOG.md)
