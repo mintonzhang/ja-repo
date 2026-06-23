@@ -448,6 +448,9 @@ scripts/docker-compat/oci-conformance.sh
 
 The wrapper uses a local `oci-conformance` binary when available, or the
 `ghcr.io/opencontainers/distribution-spec/conformance:v1.1.1` image when Docker mode is enabled.
+Docker mode uses the host network by default so the conformance container can
+reach a registry bound to `127.0.0.1`; set `DOCKER_OCI_CONFORMANCE_NETWORK=default`
+when a different Docker network layout is needed.
 Reports are written under `target/oci-conformance/docker` by default.
 GitHub Actions also includes a manual/label-gated `Docker OCI Conformance`
 workflow. Add the `run-docker-oci-conformance` label to a PR, or start it with

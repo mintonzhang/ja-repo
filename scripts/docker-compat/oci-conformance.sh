@@ -11,6 +11,7 @@ CONTENT_DISCOVERY="${OCI_TEST_CONTENT_DISCOVERY:-${DOCKER_OCI_TEST_CONTENT_DISCO
 CONTENT_MANAGEMENT="${OCI_TEST_CONTENT_MANAGEMENT:-${DOCKER_OCI_TEST_CONTENT_MANAGEMENT:-1}}"
 USE_DOCKER="${DOCKER_OCI_CONFORMANCE_USE_DOCKER:-auto}"
 IMAGE="${OCI_CONFORMANCE_IMAGE:-ghcr.io/opencontainers/distribution-spec/conformance:v1.1.1}"
+DOCKER_NETWORK="${DOCKER_OCI_CONFORMANCE_NETWORK:-host}"
 REPORT_DIR="${OCI_REPORT_DIR:-${DOCKER_OCI_REPORT_DIR:-target/oci-conformance/docker}}"
 
 log() {
@@ -57,8 +58,12 @@ if use_docker_runner; then
     log "docker is required when DOCKER_OCI_CONFORMANCE_USE_DOCKER=$USE_DOCKER"
     exit 2
   fi
-  log "running OCI distribution conformance image ${IMAGE}"
-  docker run --rm \
+  docker_args=(--rm)
+  if [[ "$DOCKER_NETWORK" != "default" ]]; then
+    docker_args+=(--network "$DOCKER_NETWORK")
+  fi
+  log "running OCI distribution conformance image ${IMAGE} on docker network ${DOCKER_NETWORK}"
+  docker run "${docker_args[@]}" \
     -e OCI_ROOT_URL \
     -e OCI_NAMESPACE \
     -e OCI_USERNAME \
