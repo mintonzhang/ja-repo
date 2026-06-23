@@ -138,12 +138,13 @@ public class DockerRegistryController {
     if (path.kind() != DockerPath.Kind.UPLOAD_START) {
       throw new DockerProtocolException(DockerErrorCode.UNSUPPORTED, "unsupported Docker POST path", 405);
     }
-    RepositoryRuntime source = mount == null || mount.isBlank() ? null : runtime;
+    MountSource source = mount == null || mount.isBlank() ? null : mountSource(runtime, target, path.imageName(), from);
     if (source != null) {
-      ensureMountSourcePullAllowed(request, runtime, from == null || from.isBlank() ? path.imageName() : from);
+      ensureMountSourcePullAllowed(request, source.runtime(), source.imageName());
     }
     var status = hosted.startUpload(
-        runtime, path.imageName(), mount, from, source, userId(request), request.getRemoteAddr());
+        runtime, path.imageName(), mount, source == null ? from : source.imageName(), source == null ? null : source.runtime(),
+        userId(request), request.getRemoteAddr());
     if (status.mounted()) {
       return ResponseEntity.status(HttpStatus.CREATED)
           .header(DockerConstants.API_VERSION_HEADER, DockerConstants.API_VERSION)
@@ -215,6 +216,9 @@ public class DockerRegistryController {
     }
     if (path.kind() == DockerPath.Kind.UPLOAD_SESSION) {
       return stream(hosted.cancelUpload(runtime, path.uploadUuid()), request, false);
+    }
+    if (path.kind() == DockerPath.Kind.BLOB) {
+      return stream(hosted.deleteBlob(runtime, path.digest()), request, false);
     }
     throw new DockerProtocolException(DockerErrorCode.UNSUPPORTED, "unsupported Docker DELETE path", 405);
   }
@@ -423,6 +427,30 @@ public class DockerRegistryController {
     }
   }
 
+  private MountSource mountSource(
+      RepositoryRuntime targetRuntime,
+      DockerTarget target,
+      String targetImage,
+      String from) {
+    String sourceImage = from == null || from.isBlank() ? targetImage : from;
+    RepositoryRuntime sourceRuntime = targetRuntime;
+    if (!target.connectorRoute() && from != null && !from.isBlank()) {
+      int slash = from.indexOf('/');
+      if (slash > 0) {
+        String candidateRepository = from.substring(0, slash);
+        var resolved = registry.resolve(candidateRepository);
+        if (resolved.isPresent() && resolved.get().format() == RepositoryFormat.DOCKER) {
+          sourceRuntime = resolved.get();
+          sourceImage = from.substring(slash + 1);
+          if (sourceImage.isBlank()) {
+            sourceImage = targetImage;
+          }
+        }
+      }
+    }
+    return new MountSource(sourceRuntime, sourceImage);
+  }
+
   private static String connectorRepositoryOrNull(HttpServletRequest request) {
     Object repository = request.getAttribute(DockerConnectorConfiguration.CONNECTOR_REPOSITORY_ATTRIBUTE);
     if (repository instanceof String value && !value.isBlank()) {
@@ -529,5 +557,8 @@ public class DockerRegistryController {
   }
 
   private record DockerTarget(String repository, DockerPath path, boolean connectorRoute) {
+  }
+
+  private record MountSource(RepositoryRuntime runtime, String imageName) {
   }
 }

@@ -7,10 +7,14 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
+import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
@@ -22,13 +26,17 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -40,18 +48,30 @@ public class BrowseAssetDetailService {
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
+  private final DockerRegistryDao dockerDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
+
+  @Autowired
+  public BrowseAssetDetailService(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ObjectMapper objectMapper) {
+    this.repositoryDao = repositoryDao;
+    this.assetDao = assetDao;
+    this.dockerDao = dockerDao;
+    this.blobStorageRegistry = blobStorageRegistry;
+    this.objectMapper = objectMapper;
+  }
 
   public BrowseAssetDetailService(
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
-    this.repositoryDao = repositoryDao;
-    this.assetDao = assetDao;
-    this.blobStorageRegistry = blobStorageRegistry;
-    this.objectMapper = objectMapper;
+    this(repositoryDao, assetDao, null, blobStorageRegistry, objectMapper);
   }
 
   public BrowseAssetDetail detail(
@@ -74,7 +94,9 @@ public class BrowseAssetDetailService {
     LinkedHashMap<String, Object> provenance = new LinkedHashMap<>();
     provenance.put("hashes_not_verified", false);
     Map<String, Object> npm = source.format() == RepositoryFormat.NPM ? npmAttributes(source, asset, blob) : Map.of();
-    Map<String, Object> docker = source.format() == RepositoryFormat.DOCKER ? dockerAttributes(asset, blob) : Map.of();
+    Map<String, Object> docker = source.format() == RepositoryFormat.DOCKER
+        ? dockerAttributes(source, asset, blob, path, resolved.dockerManifest())
+        : Map.of();
 
     return new BrowseAssetDetail(
         visibleRepository.name(),
@@ -99,9 +121,12 @@ public class BrowseAssetDetailService {
       String sourceRepositoryName,
       String storagePath) {
     if (visibleRepository.type() != RepositoryType.GROUP) {
+      if (visibleRepository.format() == RepositoryFormat.DOCKER) {
+        return resolveDockerSourceAsset(visibleRepository, storagePath);
+      }
       AssetRecord asset = assetDao.findAssetByPath(visibleRepository.id(), storagePath)
           .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found"));
-      return new ResolvedAsset(visibleRepository, asset);
+      return new ResolvedAsset(visibleRepository, asset, null);
     }
     List<RepositoryRecord> members = repositoryDao.listMembers(visibleRepository.id());
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
@@ -109,9 +134,12 @@ public class BrowseAssetDetailService {
           .filter(member -> member.name().equals(sourceRepositoryName))
           .findFirst()
           .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Source repository not found"));
+      if (source.format() == RepositoryFormat.DOCKER) {
+        return resolveDockerSourceAsset(source, storagePath);
+      }
       AssetRecord asset = assetDao.findAssetByPath(source.id(), storagePath)
           .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found"));
-      return new ResolvedAsset(source, asset);
+      return new ResolvedAsset(source, asset, null);
     }
     // Single round trip across all members instead of N sequential point queries; iterate the
     // member list so the original first-win ordering is preserved.
@@ -119,15 +147,43 @@ public class BrowseAssetDetailService {
     Map<Long, AssetRecord> assetsByRepository = assetDao.findAssetsByPathHash(
         memberIds, HashColumns.pathHash(storagePath));
     for (RepositoryRecord member : members) {
+      if (member.format() == RepositoryFormat.DOCKER) {
+        Optional<ResolvedAsset> docker = findDockerSourceAsset(member, storagePath);
+        if (docker.isPresent()) {
+          return docker.get();
+        }
+      }
       AssetRecord asset = assetsByRepository.get(member.id());
       if (asset != null) {
-        return new ResolvedAsset(member, asset);
+        return new ResolvedAsset(member, asset, null);
       }
     }
     throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found in group members");
   }
 
-  private record ResolvedAsset(RepositoryRecord source, AssetRecord asset) {}
+  private record ResolvedAsset(
+      RepositoryRecord source,
+      AssetRecord asset,
+      DockerManifestRecord dockerManifest) {}
+
+  private ResolvedAsset resolveDockerSourceAsset(RepositoryRecord source, String path) {
+    return findDockerSourceAsset(source, path)
+        .or(() -> assetDao.findAssetByPath(source.id(), path).map(asset -> new ResolvedAsset(source, asset, null)))
+        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Docker manifest not found"));
+  }
+
+  private Optional<ResolvedAsset> findDockerSourceAsset(RepositoryRecord source, String path) {
+    if (dockerDao == null) {
+      return Optional.empty();
+    }
+    Optional<DockerManifestRecord> manifest = dockerDao.findBrowseManifestByReferencePath(source.id(), path);
+    if (manifest.isEmpty()) {
+      return Optional.empty();
+    }
+    return assetDao.findAssetById(manifest.get().assetId())
+        .filter(asset -> asset.repositoryId() == source.id())
+        .map(asset -> new ResolvedAsset(source, asset, manifest.get()));
+  }
 
   private String storagePath(RepositoryFormat format, String path) {
     String normalized = normalize(path);
@@ -180,26 +236,322 @@ public class BrowseAssetDetailService {
     return npm;
   }
 
-  @SuppressWarnings("unchecked")
   private Map<String, Object> dockerAttributes(AssetRecord asset, AssetBlobRecord blob) {
     LinkedHashMap<String, Object> docker = new LinkedHashMap<>();
     docker.put("asset_kind", asset.kind());
     Map<String, Object> attributes = asset.attributes() == null ? Map.of() : asset.attributes();
     Object rawDocker = attributes.get("docker");
     if (rawDocker instanceof Map<?, ?> dockerMap) {
-      put(docker, "image_name", dockerMap.get("imageName"));
-      put(docker, "reference", dockerMap.get("reference"));
-      put(docker, "digest", dockerMap.get("digest"));
-      put(docker, "raw_bytes_digest", dockerMap.get("rawBytesDigest"));
-      put(docker, "media_type", dockerMap.get("mediaType"));
-      put(docker, "artifact_type", dockerMap.get("artifactType"));
-      put(docker, "subject_digest", dockerMap.get("subjectDigest"));
-      put(docker, "kind", dockerMap.get("kind"));
+      putNonBlank(docker, "image_name", dockerMap.get("imageName"));
+      putNonBlank(docker, "reference", dockerMap.get("reference"));
+      putNonBlank(docker, "digest", dockerMap.get("digest"));
+      putNonBlank(docker, "raw_bytes_digest", dockerMap.get("rawBytesDigest"));
+      putNonBlank(docker, "media_type", dockerMap.get("mediaType"));
+      putNonBlank(docker, "artifact_type", dockerMap.get("artifactType"));
+      putNonBlank(docker, "subject_digest", dockerMap.get("subjectDigest"));
+      putNonBlank(docker, "kind", dockerMap.get("kind"));
     }
     if (!docker.containsKey("digest") && blob.sha256() != null && !blob.sha256().isBlank()) {
       docker.put("digest", "sha256:" + blob.sha256());
     }
-    return Map.copyOf(docker);
+    return Collections.unmodifiableMap(docker);
+  }
+
+  private Map<String, Object> dockerAttributes(
+      RepositoryRecord source,
+      AssetRecord asset,
+      AssetBlobRecord blob,
+      String publicPath,
+      DockerManifestRecord resolvedManifest) {
+    LinkedHashMap<String, Object> docker = new LinkedHashMap<>(dockerAttributes(asset, blob));
+    DockerPathReference reference = DockerPathReference.parse(publicPath);
+    if (reference != null) {
+      docker.put("image_name", reference.imageName());
+      docker.put("reference", reference.reference());
+    }
+    if ("MANIFEST".equalsIgnoreCase(asset.kind())) {
+      put(docker, "manifest_size_bytes", asset.size() == null ? blob.size() : asset.size());
+      enrichDockerManifestMetadata(source, docker, resolvedManifest);
+    } else if ("BLOB".equalsIgnoreCase(asset.kind())) {
+      put(docker, "blob_size_bytes", asset.size() == null ? blob.size() : asset.size());
+    }
+    return Collections.unmodifiableMap(docker);
+  }
+
+  private void enrichDockerManifestMetadata(
+      RepositoryRecord source,
+      LinkedHashMap<String, Object> docker,
+      DockerManifestRecord resolvedManifest) {
+    if (dockerDao == null) {
+      return;
+    }
+    DockerManifestRecord manifest = resolvedManifest;
+    String imageName = text(docker.get("image_name"));
+    String digest = text(docker.get("digest"));
+    if (manifest == null && imageName != null && digest != null) {
+      manifest = dockerDao.findManifestByDigest(source.id(), imageName, digest).orElse(null);
+    }
+    if (manifest == null) {
+      return;
+    }
+    putNonBlank(docker, "digest", manifest.digest());
+    putNonBlank(docker, "media_type", manifest.mediaType());
+    putNonBlank(docker, "artifact_type", manifest.artifactType());
+    putNonBlank(docker, "subject_digest", manifest.subjectDigest());
+    List<DockerTagRecord> tags = dockerDao.listTagsForManifest(manifest.id());
+    if (!tags.isEmpty()) {
+      docker.put("tags", tags.stream().map(DockerTagRecord::tag).toList());
+    }
+    List<DockerManifestReferenceRecord> references = dockerDao.listReferences(manifest.id());
+    List<DockerManifestReferenceRecord> layers = referencesByKind(references, "LAYER");
+    List<DockerManifestReferenceRecord> configs = referencesByKind(references, "CONFIG");
+    List<DockerManifestReferenceRecord> manifests = referencesByKind(references, "MANIFEST");
+    List<DockerManifestRecord> referrers = dockerDao.listReferrers(source.id(), manifest.digest(), null);
+
+    putDescriptorList(docker, "config_descriptors", configs);
+    putDescriptorList(docker, "layer_descriptors", layers);
+    putDescriptorList(docker, "manifest_descriptors", manifests);
+    putManifestDescriptorList(docker, "referrers", referrers);
+    putCount(docker, "referrer_count", referrers.size());
+    if (references.isEmpty()) {
+      return;
+    }
+
+    docker.put("descriptor_count", references.size());
+    putCount(docker, "layer_count", layers.size());
+    putCount(docker, "config_count", configs.size());
+    putSize(docker, "layer_size_bytes", descriptorSize(layers));
+    putSize(docker, "config_size_bytes", descriptorSize(configs));
+    putSize(docker, "referenced_size_bytes", descriptorSize(references));
+    if (!layers.isEmpty()) {
+      putSize(docker, "image_size_bytes", descriptorSize(layers));
+      CachedLayerSummary cached = cachedLayerSummary(source.id(), layers);
+      putCount(docker, "cached_layer_count", cached.count());
+      putSize(docker, "cached_layer_size_bytes", cached.sizeBytes());
+    }
+    if (!manifests.isEmpty()) {
+      enrichDockerIndexMetadata(source, docker, manifest, manifests);
+    }
+  }
+
+  private void enrichDockerIndexMetadata(
+      RepositoryRecord source,
+      LinkedHashMap<String, Object> docker,
+      DockerManifestRecord parent,
+      List<DockerManifestReferenceRecord> manifests) {
+    List<Map<String, Object>> platforms = new ArrayList<>();
+    int runnablePlatforms = 0;
+    int cachedPlatforms = 0;
+    Long firstCachedSize = null;
+    String firstCachedPlatform = null;
+    for (DockerManifestReferenceRecord reference : manifests) {
+      LinkedHashMap<String, Object> platform = new LinkedHashMap<>();
+      String label = platformLabel(reference.platform());
+      putNonBlank(platform, "platform", label);
+      putNonBlank(platform, "digest", reference.digest());
+      putNonBlank(platform, "media_type", reference.mediaType());
+      putSize(platform, "manifest_size_bytes", reference.size());
+      if (isRunnablePlatform(reference.platform())) {
+        runnablePlatforms++;
+      }
+      DockerManifestRecord child = dockerDao
+          .findManifestByDigest(source.id(), parent.imageName(), reference.digest())
+          .orElse(null);
+      if (child != null) {
+        CachedLayerSummary cached = cachedLayerSummary(source.id(), referencesByKind(dockerDao.listReferences(child.id()), "LAYER"));
+        putSize(platform, "cached_image_size_bytes", cached.sizeBytes());
+        putCount(platform, "cached_layer_count", cached.count());
+        if (cached.sizeBytes() != null && cached.sizeBytes() > 0) {
+          cachedPlatforms++;
+          if (firstCachedSize == null) {
+            firstCachedSize = cached.sizeBytes();
+            firstCachedPlatform = label;
+          }
+        }
+      }
+      platforms.add(Collections.unmodifiableMap(platform));
+    }
+    docker.put("manifest_descriptor_count", manifests.size());
+    docker.put("platform_count", runnablePlatforms > 0 ? runnablePlatforms : manifests.size());
+    docker.put("platform_summary", platformSummary(platforms));
+    docker.put("platforms", List.copyOf(platforms));
+    putCount(docker, "cached_platform_count", cachedPlatforms);
+    if (cachedPlatforms == 1) {
+      putSize(docker, "cached_image_size_bytes", firstCachedSize);
+      putNonBlank(docker, "cached_image_platform", firstCachedPlatform);
+    }
+  }
+
+  private CachedLayerSummary cachedLayerSummary(long repositoryId, List<DockerManifestReferenceRecord> layers) {
+    long size = 0L;
+    int count = 0;
+    for (DockerManifestReferenceRecord layer : layers) {
+      String sha256 = sha256Hex(layer.digest());
+      if (sha256 == null) {
+        continue;
+      }
+      Optional<AssetRecord> asset = assetDao.findDockerBlobAssetBySha256(repositoryId, sha256);
+      if (asset.isEmpty() || asset.get().assetBlobId() == null) {
+        continue;
+      }
+      Optional<AssetBlobRecord> blob = assetDao.findBlobById(asset.get().assetBlobId());
+      if (blob.isEmpty()) {
+        continue;
+      }
+      count++;
+      size += blob.get().size();
+    }
+    return count == 0 ? new CachedLayerSummary(0, null) : new CachedLayerSummary(count, size);
+  }
+
+  private static List<DockerManifestReferenceRecord> referencesByKind(
+      List<DockerManifestReferenceRecord> references,
+      String kind) {
+    return references.stream()
+        .filter(reference -> kind.equalsIgnoreCase(reference.referenceKind()))
+        .toList();
+  }
+
+  private static void putDescriptorList(
+      Map<String, Object> map,
+      String key,
+      List<DockerManifestReferenceRecord> references) {
+    if (references == null || references.isEmpty()) {
+      return;
+    }
+    map.put(key, references.stream()
+        .map(BrowseAssetDetailService::descriptorMap)
+        .toList());
+  }
+
+  private static Map<String, Object> descriptorMap(DockerManifestReferenceRecord reference) {
+    LinkedHashMap<String, Object> descriptor = new LinkedHashMap<>();
+    putNonBlank(descriptor, "kind", reference.referenceKind());
+    putNonBlank(descriptor, "digest", reference.digest());
+    putNonBlank(descriptor, "media_type", reference.mediaType());
+    putSize(descriptor, "size_bytes", reference.size());
+    putNonBlank(descriptor, "platform", platformLabel(reference.platform()));
+    if (reference.platform() != null && !reference.platform().isEmpty()) {
+      descriptor.put("platform_detail", reference.platform());
+    }
+    if (reference.annotations() != null && !reference.annotations().isEmpty()) {
+      descriptor.put("annotations", reference.annotations());
+    }
+    return Collections.unmodifiableMap(descriptor);
+  }
+
+  private static void putManifestDescriptorList(
+      Map<String, Object> map,
+      String key,
+      List<DockerManifestRecord> manifests) {
+    if (manifests == null || manifests.isEmpty()) {
+      return;
+    }
+    map.put(key, manifests.stream()
+        .map(BrowseAssetDetailService::manifestDescriptorMap)
+        .toList());
+  }
+
+  private static Map<String, Object> manifestDescriptorMap(DockerManifestRecord manifest) {
+    LinkedHashMap<String, Object> descriptor = new LinkedHashMap<>();
+    putNonBlank(descriptor, "image_name", manifest.imageName());
+    putNonBlank(descriptor, "digest", manifest.digest());
+    putNonBlank(descriptor, "media_type", manifest.mediaType());
+    putNonBlank(descriptor, "artifact_type", manifest.artifactType());
+    putSize(descriptor, "size_bytes", manifest.size());
+    putNonBlank(descriptor, "updated_at", manifest.updatedAt());
+    return Collections.unmodifiableMap(descriptor);
+  }
+
+  private static Long descriptorSize(List<DockerManifestReferenceRecord> references) {
+    long size = 0L;
+    boolean present = false;
+    for (DockerManifestReferenceRecord reference : references) {
+      if (reference.size() == null) {
+        continue;
+      }
+      present = true;
+      size += reference.size();
+    }
+    return present ? size : null;
+  }
+
+  private static boolean isRunnablePlatform(Map<String, Object> platform) {
+    String os = text(platform == null ? null : platform.get("os"));
+    String architecture = text(platform == null ? null : platform.get("architecture"));
+    return os != null
+        && architecture != null
+        && !"unknown".equalsIgnoreCase(os)
+        && !"unknown".equalsIgnoreCase(architecture);
+  }
+
+  private static String platformLabel(Map<String, Object> platform) {
+    String os = text(platform == null ? null : platform.get("os"));
+    String architecture = text(platform == null ? null : platform.get("architecture"));
+    String variant = text(platform == null ? null : platform.get("variant"));
+    if (os == null && architecture == null) {
+      return null;
+    }
+    String label = (os == null ? "unknown" : os) + "/" + (architecture == null ? "unknown" : architecture);
+    return variant == null ? label : label + "/" + variant;
+  }
+
+  private static String platformSummary(List<Map<String, Object>> platforms) {
+    List<String> labels = platforms.stream()
+        .map(platform -> text(platform.get("platform")))
+        .filter(label -> label != null && !label.startsWith("unknown/"))
+        .distinct()
+        .toList();
+    if (labels.isEmpty()) {
+      labels = platforms.stream()
+          .map(platform -> text(platform.get("platform")))
+          .filter(label -> label != null)
+          .distinct()
+          .toList();
+    }
+    if (labels.isEmpty()) {
+      return null;
+    }
+    int limit = Math.min(labels.size(), 6);
+    String summary = String.join(", ", labels.subList(0, limit));
+    return labels.size() > limit ? summary + " +" + (labels.size() - limit) : summary;
+  }
+
+  private static void putCount(Map<String, Object> map, String key, int count) {
+    if (count > 0) {
+      map.put(key, count);
+    }
+  }
+
+  private static void putSize(Map<String, Object> map, String key, Long size) {
+    if (size != null) {
+      map.put(key, size);
+    }
+  }
+
+  private static String sha256Hex(String digest) {
+    if (digest == null || !digest.regionMatches(true, 0, "sha256:", 0, "sha256:".length())) {
+      return null;
+    }
+    return digest.substring("sha256:".length()).toLowerCase(Locale.ROOT);
+  }
+
+  private record CachedLayerSummary(int count, Long sizeBytes) {}
+
+  private record DockerPathReference(String imageName, String reference) {
+    static DockerPathReference parse(String path) {
+      String normalized = normalize(path);
+      if (normalized.startsWith("docker/manifests/")) {
+        normalized = normalized.substring("docker/manifests/".length());
+      }
+      int marker = normalized.lastIndexOf("/manifests/");
+      if (marker <= 0 || marker + "/manifests/".length() >= normalized.length()) {
+        return null;
+      }
+      String imageName = normalized.substring(0, marker);
+      String reference = normalized.substring(marker + "/manifests/".length());
+      return imageName.isBlank() || reference.isBlank() ? null : new DockerPathReference(imageName, reference);
+    }
   }
 
   private boolean isNpmTarball(AssetRecord asset) {
@@ -280,6 +632,21 @@ public class BrowseAssetDetailService {
     if (value != null) {
       map.put(key, value);
     }
+  }
+
+  private static void putNonBlank(Map<String, Object> map, String key, Object value) {
+    String text = text(value);
+    if (text != null) {
+      map.put(key, text);
+    }
+  }
+
+  private static String text(Object value) {
+    if (value == null) {
+      return null;
+    }
+    String text = value.toString();
+    return text.isBlank() ? null : text;
   }
 
   private record NpmTarballPath(NpmPackageId packageId, String tarballName) {

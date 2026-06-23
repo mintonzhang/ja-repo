@@ -55,7 +55,7 @@ public class DockerAuthService {
         .or(() -> authenticationService.authenticateAnonymous(false))
         .orElseThrow(() -> new DockerProtocolException(DockerErrorCode.UNAUTHORIZED, "authentication required"));
     List<Scope> granted = new ArrayList<>();
-    for (Scope scope : parseScopes(scopes)) {
+    for (Scope scope : parseScopes(scopes, connectorRepositoryOrNull(request))) {
       Set<String> actions = new LinkedHashSet<>();
       for (String action : scope.actions()) {
         if (actionAllowed(subject.permissionSubject(), scope.repository(), scope.imageName(), action)) {
@@ -169,6 +169,10 @@ public class DockerAuthService {
   }
 
   static List<Scope> parseScopes(List<String> rawScopes) {
+    return parseScopes(rawScopes, null);
+  }
+
+  static List<Scope> parseScopes(List<String> rawScopes, String connectorRepository) {
     if (rawScopes == null || rawScopes.isEmpty()) {
       return List.of();
     }
@@ -190,9 +194,16 @@ public class DockerAuthService {
         continue;
       }
       String name = rest.substring(0, colon);
-      String[] nameParts = name.split("/", 2);
-      String repository = nameParts[0];
-      String imageName = nameParts.length > 1 ? nameParts[1] : "";
+      String repository;
+      String imageName;
+      if (connectorRepository != null && !connectorRepository.isBlank()) {
+        repository = connectorRepository;
+        imageName = connectorImageName(connectorRepository, name);
+      } else {
+        String[] nameParts = name.split("/", 2);
+        repository = nameParts[0];
+        imageName = nameParts.length > 1 ? nameParts[1] : "";
+      }
       List<String> actions = java.util.Arrays.stream(rest.substring(colon + 1).split(","))
           .map(item -> item.trim().toLowerCase(Locale.ROOT))
           .filter(item -> !item.isBlank())
@@ -201,6 +212,22 @@ public class DockerAuthService {
       scopes.add(new Scope(repository, imageName, actions));
     }
     return scopes;
+  }
+
+  private static String connectorImageName(String connectorRepository, String scopeName) {
+    if (scopeName == null || scopeName.isBlank() || scopeName.equals(connectorRepository)) {
+      return "";
+    }
+    String prefix = connectorRepository + "/";
+    return scopeName.startsWith(prefix) ? scopeName.substring(prefix.length()) : scopeName;
+  }
+
+  private static String connectorRepositoryOrNull(HttpServletRequest request) {
+    Object repository = request.getAttribute(DockerConnectorConfiguration.CONNECTOR_REPOSITORY_ATTRIBUTE);
+    if (repository instanceof String value && !value.isBlank()) {
+      return value;
+    }
+    return null;
   }
 
   private boolean actionAllowed(PermissionSubject subject, String repository, String imageName, String action) {

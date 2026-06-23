@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -30,12 +31,21 @@ public class DockerProxyService {
   private final DockerManifestStore manifestStore;
   private final DockerRemoteRegistryClient remoteClient;
   private final ProxyNegativeCache negativeCache;
+  private final DockerMetrics metrics;
 
   public DockerProxyService(
       DockerBlobStore blobStore,
       DockerManifestStore manifestStore,
       DockerRemoteRegistryClient remoteClient) {
-    this(blobStore, manifestStore, remoteClient, null);
+    this(blobStore, manifestStore, remoteClient, null, (DockerMetrics) null);
+  }
+
+  public DockerProxyService(
+      DockerBlobStore blobStore,
+      DockerManifestStore manifestStore,
+      DockerRemoteRegistryClient remoteClient,
+      ProxyNegativeCache negativeCache) {
+    this(blobStore, manifestStore, remoteClient, negativeCache, (DockerMetrics) null);
   }
 
   @Autowired
@@ -43,11 +53,23 @@ public class DockerProxyService {
       DockerBlobStore blobStore,
       DockerManifestStore manifestStore,
       DockerRemoteRegistryClient remoteClient,
-      ProxyNegativeCache negativeCache) {
+      ProxyNegativeCache negativeCache,
+      ObjectProvider<DockerMetrics> metricsProvider) {
+    this(blobStore, manifestStore, remoteClient, negativeCache,
+        metricsProvider == null ? null : metricsProvider.getIfAvailable());
+  }
+
+  public DockerProxyService(
+      DockerBlobStore blobStore,
+      DockerManifestStore manifestStore,
+      DockerRemoteRegistryClient remoteClient,
+      ProxyNegativeCache negativeCache,
+      DockerMetrics metrics) {
     this.blobStore = blobStore;
     this.manifestStore = manifestStore;
     this.remoteClient = remoteClient;
     this.negativeCache = negativeCache;
+    this.metrics = metrics;
   }
 
   public DockerResponse getManifest(RepositoryRuntime runtime, String imageName, String reference, boolean headOnly) {
@@ -66,25 +88,31 @@ public class DockerProxyService {
       cached = manifestStore.getManifest(runtime, imageName, reference);
       if (DockerPathParser.isDigestReference(reference) || isFresh(cached.manifest().updatedAt(),
           runtime.metadataMaxAgeMinutesOrDefault(), Instant.now())) {
+        recordCache(runtime, "manifest", "hit");
         return serveStored(cached, headOnly, acceptHeaders);
       }
+      recordCache(runtime, "manifest", "stale");
     } catch (DockerProtocolException e) {
       if (e.code() != DockerErrorCode.MANIFEST_UNKNOWN) {
         throw e;
       }
+      recordCache(runtime, "manifest", "miss");
     }
     String remoteImage = remoteImageName(runtime, imageName);
     String remotePath = remoteImage + "/manifests/" + reference;
     if (isNotFoundCached(runtime, remotePath)) {
+      recordCache(runtime, "negative", "hit");
       throw new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, reference);
     }
     try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, remotePath, dockerAccept())) {
       if (result.status() == 404) {
         rememberNotFound(runtime, remotePath);
+        recordCache(runtime, "negative", "store_manifest");
         throw new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, reference);
       }
       if (result.status() < 200 || result.status() >= 300) {
         if (cached != null) {
+          recordCache(runtime, "manifest", "remote_error_fallback");
           return serveStored(cached, headOnly, acceptHeaders);
         }
         throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote returned " + result.status(), 502);
@@ -99,6 +127,7 @@ public class DockerProxyService {
           "proxy",
           runtime.proxyRemoteUrl(),
           false);
+      recordCache(runtime, "manifest", "remote_store");
       ensureAccepted(stored.manifest().mediaType(), acceptHeaders);
       DockerResponse response = headOnly
           ? DockerResponse.noBody(
@@ -110,6 +139,7 @@ public class DockerProxyService {
           .withHeader(DockerConstants.CONTENT_DIGEST_HEADER, stored.manifest().digest());
     } catch (IOException e) {
       if (cached != null) {
+        recordCache(runtime, "manifest", "remote_error_fallback");
         return serveStored(cached, headOnly, acceptHeaders);
       }
       throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote fetch failed: " + e.getMessage(), 502);
@@ -119,21 +149,26 @@ public class DockerProxyService {
   public DockerResponse getBlob(RepositoryRuntime runtime, String imageName, DockerDigest digest, boolean headOnly) {
     ensureProxy(runtime);
     try {
-      return blobStore.getBlob(runtime, digest, headOnly);
+      DockerResponse response = blobStore.getBlob(runtime, digest, headOnly);
+      recordCache(runtime, "blob", "hit");
+      return response;
     } catch (DockerProtocolException e) {
       if (e.code() != DockerErrorCode.BLOB_UNKNOWN) {
         throw e;
       }
+      recordCache(runtime, "blob", "miss");
     }
     String remoteImage = remoteImageName(runtime, imageName);
     DigestedFile remoteBlob = null;
     String remotePath = remoteImage + "/blobs/" + digest.value();
     if (isNotFoundCached(runtime, remotePath)) {
+      recordCache(runtime, "negative", "hit");
       throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value());
     }
     try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, remotePath, "application/octet-stream")) {
       if (result.status() == 404) {
         rememberNotFound(runtime, remotePath);
+        recordCache(runtime, "negative", "store_blob");
         throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value());
       }
       if (result.status() < 200 || result.status() >= 300) {
@@ -141,8 +176,10 @@ public class DockerProxyService {
       }
       remoteBlob = spoolAndDigest(runtime, result.body());
       if (!digest.isSha256() || !digest.hex().equals(remoteBlob.sha256())) {
+        recordDigest(runtime, "proxy_blob", "failure");
         throw new DockerProtocolException(DockerErrorCode.DIGEST_INVALID, "remote blob digest mismatch", 502);
       }
+      recordDigest(runtime, "proxy_blob", "success");
       DockerBlobStore.StoredBlob stored;
       try (InputStream in = Files.newInputStream(remoteBlob.path())) {
         stored = blobStore.putBlob(
@@ -154,6 +191,7 @@ public class DockerProxyService {
             "proxy",
             runtime.proxyRemoteUrl());
       }
+      recordCache(runtime, "blob", "remote_store");
       DockerResponse response = headOnly
           ? DockerResponse.noBody(
               200,
@@ -188,11 +226,13 @@ public class DockerProxyService {
         + (last == null || last.isBlank() ? "" : "&last=" + java.net.URLEncoder.encode(last, java.nio.charset.StandardCharsets.UTF_8));
     String namePath = remoteImage + "/tags/list";
     if (isNotFoundCached(runtime, namePath)) {
+      recordCache(runtime, "negative", "hit");
       throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, imageName);
     }
     try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, remotePath, DockerConstants.MEDIA_TYPE_JSON)) {
       if (result.status() == 404) {
         rememberNotFound(runtime, namePath);
+        recordCache(runtime, "negative", "store_tags");
         throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, imageName);
       }
       if (result.status() < 200 || result.status() >= 300) {
@@ -208,6 +248,7 @@ public class DockerProxyService {
         tags = tags.subList(0, pageSize);
       }
       Object rawName = body.get("name");
+      recordCache(runtime, "tags", "remote");
       return new DockerTagList(rawName == null ? imageName : rawName.toString(), tags, hasNext);
     } catch (IOException e) {
       throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote tag fetch failed: " + e.getMessage(), 502);
@@ -254,15 +295,19 @@ public class DockerProxyService {
                 artifactType, java.nio.charset.StandardCharsets.UTF_8));
     try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, path, DockerConstants.MEDIA_TYPE_OCI_INDEX)) {
       if (result.status() == 404) {
-        return Map.of(
+        Map<String, Object> body = Map.of(
             "schemaVersion", 2,
             "mediaType", DockerConstants.MEDIA_TYPE_OCI_INDEX,
             "manifests", List.of());
+        recordReferrers(runtime, "not_found", 0);
+        return body;
       }
       if (result.status() < 200 || result.status() >= 300) {
         throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote returned " + result.status(), 502);
       }
-      return new com.fasterxml.jackson.databind.ObjectMapper().readValue(result.body(), Map.class);
+      Map<String, Object> body = new com.fasterxml.jackson.databind.ObjectMapper().readValue(result.body(), Map.class);
+      recordReferrers(runtime, "remote", countManifests(body));
+      return body;
     } catch (IOException e) {
       throw new DockerProtocolException(
           DockerErrorCode.NAME_UNKNOWN, "remote referrers fetch failed: " + e.getMessage(), 502);
@@ -317,6 +362,29 @@ public class DockerProxyService {
     if (negativeCache != null) {
       negativeCache.rememberNotFound(runtime, path);
     }
+  }
+
+  private void recordCache(RepositoryRuntime runtime, String cache, String result) {
+    if (metrics != null) {
+      metrics.cache(cache, runtime, result);
+    }
+  }
+
+  private void recordDigest(RepositoryRuntime runtime, String target, String outcome) {
+    if (metrics != null) {
+      metrics.digestVerification(runtime, target, outcome);
+    }
+  }
+
+  private void recordReferrers(RepositoryRuntime runtime, String outcome, long count) {
+    if (metrics != null) {
+      metrics.referrers(runtime, outcome, count);
+    }
+  }
+
+  private static long countManifests(Map<String, Object> body) {
+    Object manifests = body == null ? null : body.get("manifests");
+    return manifests instanceof List<?> list ? list.size() : 0;
   }
 
   private DigestedFile spoolAndDigest(RepositoryRuntime runtime, InputStream body) throws IOException {

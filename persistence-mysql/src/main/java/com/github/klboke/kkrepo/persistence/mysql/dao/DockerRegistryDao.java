@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -307,6 +308,17 @@ public class DockerRegistryDao {
         """, String.class, args.toArray());
   }
 
+  public boolean imageExists(long repositoryId, String imageName) {
+    Integer count = jdbcTemplate.queryForObject("""
+        SELECT COUNT(*)
+        FROM docker_manifest
+        WHERE repository_id = ?
+          AND image_name_hash = ?
+          AND deleted_at IS NULL
+        """, Integer.class, repositoryId, hash(imageName));
+    return count != null && count > 0;
+  }
+
   public int countTags(long repositoryId, String imageName) {
     Integer count = jdbcTemplate.queryForObject("""
         SELECT COUNT(*)
@@ -420,6 +432,137 @@ public class DockerRegistryDao {
     return manifestCount != null && manifestCount > 0;
   }
 
+  public OptionalLong findUnreferencedBlobAssetIdForCleanup(
+      long repositoryId, long afterAssetId, int maxCandidates, Instant updatedBefore) {
+    List<Object> args = new ArrayList<>();
+    args.add(repositoryId);
+    args.add(Math.max(0, afterAssetId));
+    String updatedBeforePredicate = "";
+    if (updatedBefore != null) {
+      updatedBeforePredicate = "  AND a.last_updated_at < ?\n";
+      args.add(nullableTimestamp(updatedBefore));
+    }
+    args.add(Math.max(1, maxCandidates));
+    return jdbcTemplate.queryForList("""
+        SELECT a.id
+        FROM asset a
+        JOIN asset_blob b ON b.id = a.asset_blob_id
+        WHERE a.repository_id = ?
+          AND a.id > ?
+          AND a.format = 'docker'
+          AND a.kind = 'BLOB'
+          AND b.deleted_at IS NULL
+        """ + updatedBeforePredicate + """
+          AND NOT EXISTS (
+            SELECT 1
+            FROM docker_manifest_reference r
+            JOIN docker_manifest m ON m.id = r.manifest_id
+            WHERE r.repository_id = a.repository_id
+              AND m.deleted_at IS NULL
+              AND (
+                r.digest = JSON_UNQUOTE(JSON_EXTRACT(a.attributes_json, '$.docker.digest'))
+                OR r.digest_hash = UNHEX(SHA2(JSON_UNQUOTE(JSON_EXTRACT(a.attributes_json, '$.docker.digest')), 256))
+                OR (
+                  b.sha256 IS NOT NULL
+                  AND r.digest = CONCAT('sha256:', b.sha256)
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM docker_manifest m
+            WHERE m.repository_id = a.repository_id
+              AND m.deleted_at IS NULL
+              AND (
+                m.digest = JSON_UNQUOTE(JSON_EXTRACT(a.attributes_json, '$.docker.digest'))
+                OR (
+                  b.sha256 IS NOT NULL
+                  AND m.digest = CONCAT('sha256:', b.sha256)
+                )
+              )
+          )
+        ORDER BY a.id
+        LIMIT ?
+        """, Long.class, args.toArray())
+        .stream()
+        .findFirst()
+        .map(OptionalLong::of)
+        .orElseGet(OptionalLong::empty);
+  }
+
+  public List<CleanupPolicyRecord> listCleanupPolicies(long repositoryId) {
+    return jdbcTemplate.query("""
+        SELECT p.id, p.name, p.criteria_json
+        FROM repository_cleanup_policy rp
+        JOIN cleanup_policy p ON p.id = rp.cleanup_policy_id
+        WHERE rp.repository_id = ?
+          AND p.format = 'docker'
+        ORDER BY p.name
+        """, (rs, rowNum) -> new CleanupPolicyRecord(
+            rs.getLong("id"),
+            rs.getString("name"),
+            jsonColumns.read(rs.getString("criteria_json"))),
+        repositoryId);
+  }
+
+  public List<CleanupTagCandidate> listTagCleanupCandidates(long repositoryId, int limit) {
+    return jdbcTemplate.query("""
+        SELECT t.image_name, t.tag
+        FROM docker_tag t
+        JOIN docker_manifest m ON m.id = t.manifest_id
+        WHERE t.repository_id = ?
+          AND m.deleted_at IS NULL
+        ORDER BY t.updated_at, t.id
+        LIMIT ?
+        """, (rs, rowNum) -> new CleanupTagCandidate(
+            rs.getString("image_name"),
+            rs.getString("tag")),
+        repositoryId,
+        Math.max(1, limit));
+  }
+
+  public List<CleanupManifestCandidate> listManifestCleanupCandidates(
+      long repositoryId,
+      boolean untaggedOnly,
+      Instant lastDownloadedBefore,
+      Instant lastUpdatedBefore,
+      int limit) {
+    List<Object> args = new ArrayList<>();
+    args.add(repositoryId);
+    StringBuilder predicate = new StringBuilder();
+    if (untaggedOnly) {
+      predicate.append("""
+          AND NOT EXISTS (
+            SELECT 1
+            FROM docker_tag t
+            WHERE t.manifest_id = m.id
+          )
+          """);
+    }
+    if (lastDownloadedBefore != null) {
+      predicate.append("  AND (a.last_downloaded_at IS NULL OR a.last_downloaded_at < ?)\n");
+      args.add(nullableTimestamp(lastDownloadedBefore));
+    }
+    if (lastUpdatedBefore != null) {
+      predicate.append("  AND m.updated_at < ?\n");
+      args.add(nullableTimestamp(lastUpdatedBefore));
+    }
+    args.add(Math.max(1, limit));
+    return jdbcTemplate.query("""
+        SELECT m.image_name, m.digest
+        FROM docker_manifest m
+        JOIN asset a ON a.id = m.asset_id
+        WHERE m.repository_id = ?
+          AND m.deleted_at IS NULL
+        """ + predicate + """
+        ORDER BY m.updated_at, m.id
+        LIMIT ?
+        """, (rs, rowNum) -> new CleanupManifestCandidate(
+            rs.getString("image_name"),
+            rs.getString("digest")),
+        args.toArray());
+  }
+
   public List<String> listCatalog(long repositoryId, String last, int limit) {
     List<Object> args = new ArrayList<>();
     args.add(repositoryId);
@@ -438,6 +581,71 @@ public class DockerRegistryDao {
         ORDER BY image_name
         LIMIT ?
         """, String.class, args.toArray());
+  }
+
+  public List<BrowseImageRow> listBrowseImages(long repositoryId, String parentPath) {
+    String normalized = parentPath == null ? "" : parentPath.trim();
+    return jdbcTemplate.query("""
+        SELECT image_name,
+               MAX(updated_at) AS updated_at,
+               MAX(size) AS size,
+               MAX(media_type) AS media_type
+        FROM docker_manifest
+        WHERE repository_id = ?
+          AND deleted_at IS NULL
+          AND (? = '' OR image_name = ? OR image_name LIKE CONCAT(?, '/%'))
+        GROUP BY image_name
+        ORDER BY image_name
+        """, (rs, rowNum) -> new BrowseImageRow(
+            rs.getString("image_name"),
+            nullableInstant(rs, "updated_at"),
+            rs.getObject("size") == null ? null : rs.getLong("size"),
+            rs.getString("media_type")),
+        repositoryId, normalized, normalized, normalized);
+  }
+
+  public List<BrowseReferenceRow> listBrowseReferences(long repositoryId, String imageName) {
+    return jdbcTemplate.query("""
+        SELECT t.tag AS reference,
+               t.manifest_digest AS digest,
+               m.asset_id,
+               m.size,
+               m.media_type,
+               m.updated_at
+        FROM docker_tag t
+        JOIN docker_manifest m ON m.id = t.manifest_id
+        WHERE t.repository_id = ?
+          AND t.image_name_hash = ?
+          AND m.deleted_at IS NULL
+        UNION ALL
+        SELECT m.digest AS reference,
+               m.digest AS digest,
+               m.asset_id,
+               m.size,
+               m.media_type,
+               m.updated_at
+        FROM docker_manifest m
+        WHERE m.repository_id = ?
+          AND m.image_name_hash = ?
+          AND m.deleted_at IS NULL
+        ORDER BY reference
+        """, (rs, rowNum) -> new BrowseReferenceRow(
+            rs.getString("reference"),
+            rs.getString("digest"),
+            rs.getLong("asset_id"),
+            rs.getObject("size") == null ? null : rs.getLong("size"),
+            rs.getString("media_type"),
+            nullableInstant(rs, "updated_at")),
+        repositoryId, hash(imageName), repositoryId, hash(imageName));
+  }
+
+  public Optional<DockerManifestRecord> findBrowseManifestByReferencePath(
+      long repositoryId, String path) {
+    BrowseReferencePath ref = BrowseReferencePath.parse(path);
+    if (ref == null) {
+      return Optional.empty();
+    }
+    return findManifestByReference(repositoryId, ref.imageName(), ref.reference());
   }
 
   public static byte[] hash(String value) {
@@ -460,6 +668,49 @@ public class DockerRegistryDao {
   public record DeletedManifest(int deleted, Long assetId, Long assetBlobId) {
     public static DeletedManifest notFound() {
       return new DeletedManifest(0, null, null);
+    }
+  }
+
+  public record BrowseImageRow(
+      String imageName,
+      Instant updatedAt,
+      Long size,
+      String mediaType) {
+  }
+
+  public record BrowseReferenceRow(
+      String reference,
+      String digest,
+      long assetId,
+      Long size,
+      String mediaType,
+      Instant updatedAt) {
+  }
+
+  public record CleanupPolicyRecord(long id, String name, Map<String, Object> criteria) {
+  }
+
+  public record CleanupTagCandidate(String imageName, String tag) {
+  }
+
+  public record CleanupManifestCandidate(String imageName, String digest) {
+  }
+
+  private record BrowseReferencePath(String imageName, String reference) {
+    private static BrowseReferencePath parse(String path) {
+      String normalized = path == null ? "" : path.trim();
+      if (normalized.startsWith("docker/manifests/")) {
+        normalized = normalized.substring("docker/manifests/".length());
+      }
+      int marker = normalized.lastIndexOf("/manifests/");
+      if (marker <= 0 || marker + "/manifests/".length() >= normalized.length()) {
+        return null;
+      }
+      String imageName = normalized.substring(0, marker);
+      String reference = normalized.substring(marker + "/manifests/".length());
+      return imageName.isBlank() || reference.isBlank()
+          ? null
+          : new BrowseReferencePath(imageName, reference);
     }
   }
 }

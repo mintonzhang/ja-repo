@@ -14,15 +14,22 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.InputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,16 +39,31 @@ public class DockerBlobStore {
   private final BlobStorageRegistry blobStorageRegistry;
   private final AssetMetadataCache assetMetadataCache;
   private final TransientTransactionRetry transactionRetry;
+  private final GroupMemberAssetCache groupMemberAssetCache;
+  private final DockerMetrics metrics;
+
+  @Autowired
+  public DockerBlobStore(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      GroupMemberAssetCache groupMemberAssetCache,
+      DockerMetrics metrics) {
+    this.assetDao = assetDao;
+    this.blobStorageRegistry = blobStorageRegistry;
+    this.assetMetadataCache = assetMetadataCache;
+    this.transactionRetry = transactionRetry;
+    this.groupMemberAssetCache = groupMemberAssetCache;
+    this.metrics = metrics;
+  }
 
   public DockerBlobStore(
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
       AssetMetadataCache assetMetadataCache,
       TransientTransactionRetry transactionRetry) {
-    this.assetDao = assetDao;
-    this.blobStorageRegistry = blobStorageRegistry;
-    this.assetMetadataCache = assetMetadataCache;
-    this.transactionRetry = transactionRetry;
+    this(assetDao, blobStorageRegistry, assetMetadataCache, transactionRetry, null, null);
   }
 
   public Optional<StoredBlob> findBlob(RepositoryRuntime runtime, DockerDigest digest) {
@@ -77,6 +99,19 @@ public class DockerBlobStore {
         .withHeader("ETag", "\"" + digest.value() + "\"");
   }
 
+  @Transactional
+  public int deleteBlob(RepositoryRuntime runtime, DockerDigest digest) {
+    StoredBlob stored = findBlob(runtime, digest)
+        .orElseThrow(() -> new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value()));
+    assetDao.deleteAssetById(stored.asset().id());
+    if (stored.asset().assetBlobId() != null) {
+      assetDao.markBlobDeletedIfUnreferenced(stored.asset().assetBlobId(), "docker blob deleted");
+    }
+    assetMetadataCache.evictAfterCommit(runtime.id(), stored.asset().path());
+    invalidateGroupMemberCaches(runtime);
+    return 1;
+  }
+
   public StoredBlob putBlob(
       RepositoryRuntime runtime,
       DockerDigest digest,
@@ -107,6 +142,60 @@ public class DockerBlobStore {
       BlobTransactionCleanup.deleteIfUnreferenced(
           assetDao, storage, runtime.blobStoreId(), reference, "Docker blob persist failure");
       throw e;
+    }
+  }
+
+  public StoredBlob putVerifiedBlob(
+      RepositoryRuntime runtime,
+      DockerDigest digest,
+      InputStream body,
+      long size,
+      String contentType,
+      String createdBy,
+      String createdByIp) {
+    if (!digest.isSha256()) {
+      throw new DockerProtocolException(DockerErrorCode.DIGEST_INVALID, "only sha256 blobs are supported", 400);
+    }
+    try (VerifyingInputStream verified = new VerifyingInputStream(body, digest, size)) {
+      Optional<AssetBlobRecord> reusable = assetDao.findReusableBlobBySha256(
+          runtime.blobStoreId(), digest.hex(), size);
+      if (reusable.isPresent()) {
+        try {
+          verified.transferTo(java.io.OutputStream.nullOutputStream());
+          StoredBlob stored = persistBlobRecordReuse(runtime, digest, reusable.get(), null, createdBy, createdByIp);
+          recordDigest(runtime, "verified_blob", "success");
+          return stored;
+        } catch (DockerProtocolException e) {
+          recordDigest(runtime, "verified_blob", "failure");
+          throw e;
+        }
+      }
+      BlobStorage storage = storage(runtime);
+      BlobReference reference = null;
+      try {
+        reference = storage.put(
+            runtime.name(),
+            blobPath(digest),
+            verified,
+            size,
+            digest.hex());
+        verified.verifyDigest();
+        BlobReference uploadedReference = reference;
+        StoredBlob stored = executePersist(() -> persistBlob(
+            runtime, digest, uploadedReference, size, contentType, createdBy, createdByIp));
+        recordDigest(runtime, "verified_blob", "success");
+        return stored;
+      } catch (RuntimeException e) {
+        recordDigest(runtime, "verified_blob", "failure");
+        if (reference != null) {
+          BlobTransactionCleanup.deleteIfUnreferenced(
+              assetDao, storage, runtime.blobStoreId(), reference, "Docker blob persist failure");
+        }
+        throw e;
+      }
+    } catch (IOException e) {
+      recordDigest(runtime, "verified_blob", "failure");
+      throw new UncheckedIOException(e);
     }
   }
 
@@ -258,6 +347,7 @@ public class DockerBlobStore {
       }
     }
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
+    invalidateGroupMemberCaches(runtime);
     return new StoredBlob(asset, blob);
   }
 
@@ -299,6 +389,25 @@ public class DockerBlobStore {
     return transactionRetry.executeIfNoTransaction("Persist Docker blob", callback);
   }
 
+  private void invalidateGroupMemberCaches(RepositoryRuntime runtime) {
+    if (groupMemberAssetCache != null && runtime != null) {
+      groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id());
+      recordCache(runtime, "group_member", "invalidate_member");
+    }
+  }
+
+  private void recordDigest(RepositoryRuntime runtime, String target, String outcome) {
+    if (metrics != null) {
+      metrics.digestVerification(runtime, target, outcome);
+    }
+  }
+
+  private void recordCache(RepositoryRuntime runtime, String cache, String result) {
+    if (metrics != null) {
+      metrics.cache(cache, runtime, result);
+    }
+  }
+
   private static String contentType(AssetBlobRecord blob) {
     return contentType(blob.contentType());
   }
@@ -310,5 +419,59 @@ public class DockerBlobStore {
   }
 
   public record StoredBlob(AssetRecord asset, AssetBlobRecord blob) {
+  }
+
+  private static final class VerifyingInputStream extends java.io.FilterInputStream {
+    private final DockerDigest expectedDigest;
+    private final long expectedSize;
+    private final MessageDigest sha256;
+    private long size;
+    private boolean verified;
+
+    private VerifyingInputStream(InputStream delegate, DockerDigest expectedDigest, long expectedSize) {
+      super(delegate);
+      this.expectedDigest = expectedDigest;
+      this.expectedSize = expectedSize;
+      try {
+        this.sha256 = MessageDigest.getInstance("SHA-256");
+      } catch (NoSuchAlgorithmException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+
+    @Override
+    public int read() throws IOException {
+      int value = super.read();
+      if (value >= 0) {
+        sha256.update((byte) value);
+        size++;
+      } else {
+        verifyDigest();
+      }
+      return value;
+    }
+
+    @Override
+    public int read(byte[] b, int off, int len) throws IOException {
+      int read = super.read(b, off, len);
+      if (read > 0) {
+        sha256.update(b, off, read);
+        size += read;
+      } else if (read < 0) {
+        verifyDigest();
+      }
+      return read;
+    }
+
+    private void verifyDigest() {
+      if (verified) {
+        return;
+      }
+      verified = true;
+      String actual = HexFormat.of().formatHex(sha256.digest());
+      if (size != expectedSize || !actual.equals(expectedDigest.hex())) {
+        throw new DockerProtocolException(DockerErrorCode.DIGEST_INVALID, "uploaded blob digest mismatch", 400);
+      }
+    }
   }
 }

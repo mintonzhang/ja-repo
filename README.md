@@ -6,9 +6,9 @@
 [![Container](https://img.shields.io/badge/ghcr.io-kkrepo-blue)](https://github.com/klboke/kkrepo/pkgs/container/kkrepo)
 [![Security Policy](https://img.shields.io/badge/security-policy-green)](SECURITY.md)
 
-[Chinese version](README.cn.md)
+[中文](README.cn.md)
 
-kkRepo is an independent, self-hosted artifact repository for Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and Raw artifacts.
+kkRepo is an independent, self-hosted artifact repository for Maven, npm, PyPI, Go, Helm, Docker/OCI, NuGet, RubyGems, Yum, and Raw artifacts.
 
 The project implements client-visible compatibility and migration support for Sonatype Nexus Repository deployments, including the `/repository/<repo>/...` URL layout and compatible permission/authentication behavior where required for migration. kkRepo uses MySQL for metadata and shared runtime state, supports OSS/S3 blob storage, and is designed for multi-replica deployment.
 
@@ -58,6 +58,7 @@ Local hot-reload development and testing are documented in the [Development Guid
 | PyPI | hosted / proxy / group | twine upload and admin UI upload | simple index supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Go | proxy / group | Go module proxy is mainly read-only proxy; hosted upload is not supported | Supported | Proxy repositories can be migrated optionally |
 | Helm | hosted / proxy | chart push, PUT upload, and admin UI upload | index.yaml supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
+| Docker / OCI | hosted / proxy / group | Registry V2 login, hosted push/pull, proxy pull, group pull, OCI referrers, cleanup, and connector-port access | Manifest/tag/blob metadata supported | Hosted Docker repository data migration is supported through the Nexus Repository Data flow |
 | NuGet | hosted / proxy / group | package push and admin UI upload | v3 service index / search supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | RubyGems | hosted / proxy / group | gem push/yank and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Yum | hosted / proxy / group | RPM upload and admin UI upload | repodata supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
@@ -73,7 +74,7 @@ Migration is available in the `/admin/` console:
 2. On the `Nexus Metadata` page, run `Run preflight` first, then run `Run migration` after blocking issues are resolved.
 3. On the `Nexus Repository Data` page, run `Sync metadata` to migrate repository metadata, then run `Sync packages` to migrate the real blob data.
 4. For the first repository data migration, leave `Metadata since` empty to scan all data. Later runs can set `Metadata since` for incremental migration.
-5. After migration is complete, point the original repository domain to kkRepo. Client configuration does not need to change.
+5. After migration is complete, point the original repository domain to kkRepo. Non-Docker clients can keep the same `/repository/<repo>/...` URLs; Docker clients should keep the same `/v2/...` registry entrypoint, repository names, and connector/path-based routing shape.
 
 Migration supports interruption and resume. Completed data is skipped on later runs. See the [Nexus Migration Guide](docs/en/nexus-migration-guide.md) for the full process.
 
@@ -82,7 +83,7 @@ Migration supports interruption and resume. Completed data is skipped on later r
 | Dimension | Sonatype Nexus Repository OSS / Community Edition | kkRepo |
 | --- | --- | --- |
 | Product positioning | A general-purpose artifact repository management platform with broad format and management coverage | Provides migration-oriented client behavior, permission model, and `/repository/<repo>/...` URL compatibility while using a MySQL-first, OSS/S3-first, multi-replica-friendly architecture |
-| Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and Raw. Each format is implemented as an independent protocol module for prioritized extension and validation |
+| Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, PyPI, Go, Helm, Docker/OCI, NuGet, RubyGems, Yum, and Raw. Each format is implemented as an independent protocol module for prioritized extension and validation |
 | Usage limits | Community Edition targets individuals and small teams. Official limits are up to 40,000 components and 100,000 requests/day. When exceeded, new component creation is paused until usage returns below the limits | Does not include Community Edition-style license usage limits. Capacity is bounded by MySQL, OSS/S3, replica count, and deployment sizing, so it can scale with actual business needs |
 | High availability deployment | Open source editions are suitable for a single instance or basic Kubernetes deployment; official HA deployment is a Pro capability | Designed for multi-replica deployment by default: session, authentication tickets, catalog watermarks, locks, migration progress, and short-lived coordination state are stored in MySQL. In-process cache is only a rebuildable hot cache |
 | Stability and upgrade | Version boundaries are complex: 3.70.x is the last version supporting OrientDB; 3.71.0 defaults new installs to H2, but H2 is still embedded; Community Edition did not support free external PostgreSQL until 3.77.0+; search was fully moved to SQL and away from Elasticsearch only in 3.88.0. Older OrientDB/Elasticsearch/local-data-directory deployments carry heavy upgrade windows and recovery depends heavily on backups, repair tasks, and manual intervention | MySQL-first runtime with no dependency on OrientDB or embedded Elasticsearch. Core state is in MySQL, blobs are in OSS/S3/File blob store, and cache/index data is rebuildable, making rolling upgrade, failover, and recovery easier |
@@ -107,7 +108,7 @@ The repository list shows hosted, proxy, and group repositories with format, sta
 
 ![User repository list](docs/img/img_7.png)
 
-Search components by format across Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Raw, and other repository types.
+Search components by format across Maven, npm, PyPI, Go, Helm, Docker/OCI, NuGet, RubyGems, Yum, Raw, and other repository types.
 
 ![User artifact search](docs/img/img.png)
 
@@ -143,9 +144,9 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 
 ## Roadmap
 
-Planned repository format iterations:
+Repository format roadmap:
 
-1. Docker / OCI Registry - In progress ([development plan](docs/en/dev/docker-repository-implementation-plan.md))
+1. Docker / OCI Registry - Completed ([implementation notes](docs/en/dev/docker-repository-implementation-plan.md))
 2. APT / Debian
 3. Cargo / Rust
 4. Terraform Provider / Module Registry

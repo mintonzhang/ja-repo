@@ -131,27 +131,9 @@ class RepositoryDataMigrationWorker {
             cursor,
             repositoryJob.pageSize(),
             metadataSince);
-        List<RepositoryDataMigrationAssetRecord> records = page.assets().stream()
-            .filter(asset -> RepositoryDataMigrationPaths.shouldDiscoverAsset(repositoryJob.format(), asset.path()))
-            .map(asset -> assetRecord(repositoryJob, asset))
-            .toList();
-        complete = page.complete();
+        complete = processDiscoveryPage(repositoryJob, page, metadataSince);
         cursor = page.nextAfterPath();
-        String nextCursor = cursor;
-        boolean pageComplete = complete;
-        transactionTemplate.executeWithoutResult(status -> {
-          Map<java.nio.ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> existingTargets =
-              migrationDao.findTargetAssetsByPathHash(
-                  repositoryJob.targetRepositoryId(),
-                  records.stream().map(RepositoryDataMigrationAssetRecord::sourcePathHash).toList());
-          migrationDao.upsertDiscoveredAssets(repositoryJob.id(), records, existingTargets);
-          migrationDao.finishDiscoveryPage(repositoryJob.id(), nextCursor, pageComplete);
-        });
         pages++;
-        if (!page.warnings().isEmpty()) {
-          log.warn("repository data discovery warnings for repo={}: {}",
-              repositoryJob.sourceRepositoryName(), page.warnings());
-        }
       } while (!complete && pages < DISCOVERY_PAGES_PER_RUN);
       migrationService.refreshJobSummary(repositoryJob.migrationJobId());
       return true;
@@ -162,6 +144,32 @@ class RepositoryDataMigrationWorker {
       migrationService.refreshJobSummary(repositoryJob.migrationJobId());
       return true;
     }
+  }
+
+  private boolean processDiscoveryPage(
+      RepositoryDataMigrationRepositoryRecord repositoryJob,
+      RepositoryAssetPage page,
+      Instant metadataSince) {
+    List<RepositoryDataMigrationAssetRecord> records = page.assets().stream()
+        .filter(asset -> changedSince(asset, metadataSince))
+        .filter(asset -> RepositoryDataMigrationPaths.shouldDiscoverAsset(repositoryJob.format(), asset.path()))
+        .map(asset -> assetRecord(repositoryJob, asset))
+        .toList();
+    boolean complete = page.complete();
+    String nextCursor = page.nextAfterPath();
+    transactionTemplate.executeWithoutResult(status -> {
+      Map<java.nio.ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> existingTargets =
+          migrationDao.findTargetAssetsByPathHash(
+              repositoryJob.targetRepositoryId(),
+              records.stream().map(RepositoryDataMigrationAssetRecord::sourcePathHash).toList());
+      migrationDao.upsertDiscoveredAssets(repositoryJob.id(), records, existingTargets);
+      migrationDao.finishDiscoveryPage(repositoryJob.id(), nextCursor, complete);
+    });
+    if (!page.warnings().isEmpty()) {
+      log.warn("repository data discovery warnings for repo={}: {}",
+          repositoryJob.sourceRepositoryName(), page.warnings());
+    }
+    return complete;
   }
 
   private boolean migrateAssetBatch(Long migrationJobId) {
@@ -262,6 +270,25 @@ class RepositoryDataMigrationWorker {
       return false;
     }
     return true;
+  }
+
+  private static boolean changedSince(RepositoryAssetMetadata asset, Instant since) {
+    if (since == null) {
+      return true;
+    }
+    Instant blobUpdated = instant(asset.blobUpdated());
+    if (blobUpdated != null && !blobUpdated.isBefore(since)) {
+      return true;
+    }
+    Instant blobCreated = instant(asset.blobCreated());
+    if (blobCreated != null && !blobCreated.isBefore(since)) {
+      return true;
+    }
+    if (blobUpdated == null && blobCreated == null) {
+      Instant lastUpdated = instant(asset.lastUpdated());
+      return lastUpdated != null && !lastUpdated.isBefore(since);
+    }
+    return false;
   }
 
   private SourceAccess sourceAccess(MigrationJobRecord job) {

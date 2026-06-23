@@ -126,6 +126,7 @@ class BrowseControllerSecurityTest {
         repositories,
         browseNodes,
         null,
+        null,
         new StubAuthenticationService(authenticated, anonymous),
         security);
   }

@@ -1,0 +1,91 @@
+name: Docker OCI Conformance
+
+on:
+  workflow_dispatch:
+    inputs:
+      content_management:
+        description: Enable OCI Content Management tests
+        required: true
+        default: true
+        type: boolean
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-oci-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    name: OCI Distribution conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-docker-oci-conformance')
+    env:
+      COMPOSE_PROJECT_NAME: kkrepo-oci-conformance
+      KKREPO_COMPAT_PORT: "18090"
+      KKREPO_MANAGEMENT_PORT: "18091"
+      DOCKER_OCI_CONNECTOR_PORT: "18180"
+      OCI_ROOT_URL: http://127.0.0.1:18180
+      OCI_NAMESPACE: kkrepo-conformance
+      OCI_USERNAME: admin
+      OCI_PASSWORD: "12345678"
+      OCI_TEST_PULL: "1"
+      OCI_TEST_PUSH: "1"
+      OCI_TEST_CONTENT_DISCOVERY: "1"
+      OCI_TEST_CONTENT_MANAGEMENT: ${{ github.event_name != 'workflow_dispatch' || inputs.content_management }}
+      DOCKER_OCI_CONFORMANCE_USE_DOCKER: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Validate live compatibility compose file
+        run: docker compose -f docker-compose.compat.yml config
+
+      - name: Build candidate image
+        run: scripts/build-docker-image.sh kkrepo:compat
+
+      - name: Start candidate service
+        run: docker compose -f docker-compose.compat.yml up -d mysql kkrepo
+
+      - name: Prepare Docker hosted repository
+        run: scripts/ci/docker-oci-conformance-setup.sh
+
+      - name: Run OCI Distribution conformance
+        run: scripts/docker-compat/oci-conformance.sh
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose -f docker-compose.compat.yml ps > artifacts/docker-oci-conformance-ps.txt || true
+          docker compose -f docker-compose.compat.yml logs --no-color --timestamps > artifacts/docker-oci-conformance-compose.log || true
+          cp -R target/oci-conformance artifacts/oci-conformance || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-oci-conformance-logs
+          path: artifacts/
+          if-no-files-found: ignore
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.compat.yml down -v

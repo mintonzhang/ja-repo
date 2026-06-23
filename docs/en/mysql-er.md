@@ -2,7 +2,7 @@
 
 The current MySQL schema is defined by `server/src/main/resources/db/migration/V1__init_schema.sql` through `V24__remove_legacy_oss_accelerator_engine.sql`, and is executed by Flyway during service startup. The target database is MySQL 8 InnoDB.
 
-The first version continues to use a "unified content table + format field" model instead of creating physical tables per format for Maven/npm/PyPI/Go/Helm/Yum/RubyGems/NuGet. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or dedicated tables.
+The schema uses a "unified content table + format field" model for shared asset/blob data, while formats with protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, and referrers, add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
 
 ## Repository And Content ER
 

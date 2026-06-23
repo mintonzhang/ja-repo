@@ -2,7 +2,7 @@
 
 本文说明从 Nexus Repository 迁移到 kkrepo 的准备条件、执行顺序、增量迁移和域名切换方式。
 
-kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 等客户端配置不需要修改。
+kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 等非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
 
 ## 迁移流程概览
 
@@ -56,6 +56,18 @@ kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行
 6. 如有失败项，处理源端权限、网络或存储问题后点击 `Retry failed`，再继续 `Sync packages`。
 
 `Sync metadata` 只发现和记录待迁移资产，不会下载真实 blob。真实包文件由 `Sync packages` 迁移。
+
+### Docker 仓库端到端验证
+
+Docker / OCI 仓库迁移也走 `Nexus Repository Data` 两步流程。为了避免本地验证误扫所有 hosted 仓库，可以在请求中指定 `repositories` 或 `repositoryNames`，只迁移目标 Docker hosted 仓库。
+
+本地参考 Nexus 默认使用 `http://localhost:28090/`：
+
+```bash
+scripts/docker-compat/migration-e2e.sh
+```
+
+该脚本会向源端 `docker-hosted` 推送一个测试镜像，只迁移这个 Docker hosted 仓库的 metadata 和 blob 数据，然后从 kkrepo Docker connector 拉取同一镜像并校验 digest。
 
 ### 增量迁移
 

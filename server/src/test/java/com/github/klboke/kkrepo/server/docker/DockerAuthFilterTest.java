@@ -141,6 +141,37 @@ class DockerAuthFilterTest {
   }
 
   @Test
+  void connectorRouteChallengeUsesMappedRepositoryInTokenScope() throws Exception {
+    RepositoryRuntime runtime = dockerProxy("docker-hosted");
+    when(registry.resolve("docker-hosted")).thenReturn(Optional.of(runtime));
+    when(authService.challenge(
+        "http://127.0.0.1:18180/service/rest/v1/docker/token",
+        "127.0.0.1:18180",
+        "codex/alpine",
+        null,
+        "pull"))
+        .thenReturn("Bearer realm=\"http://127.0.0.1:18180/service/rest/v1/docker/token\","
+            + "service=\"127.0.0.1:18180\",scope=\"repository:codex/alpine:pull\"");
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("GET", "/v2/codex/alpine/manifests/latest");
+    request.setScheme("http");
+    request.setServerName("127.0.0.1");
+    request.setServerPort(18180);
+    request.setAttribute(DockerConnectorConfiguration.CONNECTOR_REPOSITORY_ATTRIBUTE, "docker-hosted");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    assertEquals(401, response.getStatus());
+    assertEquals(
+        "Bearer realm=\"http://127.0.0.1:18180/service/rest/v1/docker/token\","
+            + "service=\"127.0.0.1:18180\",scope=\"repository:codex/alpine:pull\"",
+        response.getHeader(HttpHeaders.WWW_AUTHENTICATE));
+  }
+
+  @Test
   void validBearerTokenContinuesToPermissionCheckAndFilterChain() throws Exception {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));

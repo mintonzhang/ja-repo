@@ -154,6 +154,7 @@ public class NexusMigrationController {
         command.concurrency(),
         command.checksumValidation(),
         parseInstant(command.metadataSince(), "metadataSince"),
+        repositoryNames(command.repositories(), command.repositoryNames()),
         repositoryNames(command.backupProxyRepositories(), command.backupProxyRepositoryNames())));
     repositoryDataMigrationWorker.triggerMetadata(status.jobId());
     return status;

@@ -2,7 +2,7 @@
 
 当前 MySQL schema 以 `server/src/main/resources/db/migration/V1__init_schema.sql` 到 `V24__remove_legacy_oss_accelerator_engine.sql` 为准，并由 Flyway 在服务启动时执行。目标数据库是 MySQL 8 InnoDB。
 
-第一版继续采用“统一内容表 + format 字段”的模型，而不是按 Maven/npm/PyPI/Go/Helm/Yum/RubyGems/NuGet 每种格式拆物理表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型；对 Docker/OCI manifest、tag、upload session、referrers 等协议专有关系，则使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 

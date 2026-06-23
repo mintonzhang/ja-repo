@@ -12,7 +12,10 @@ import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationR
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationService;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusApiKey;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusContentSelector;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusRole;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusUser;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusUserRoleMapping;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationWriter;
 import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationJobDao;
@@ -57,13 +60,13 @@ public class NexusApiMigrationService {
 
   public NexusMigrationPreflight preflight(NexusMigrationRequest request)
       throws Exception {
-    return preflight(inventory(request));
+    return preflight(inventory(request), request.targetBlobStore());
   }
 
   @Transactional
   public NexusMigrationResult migrate(NexusMigrationRequest request) throws Exception {
     NexusInventory inventory = inventory(request);
-    NexusMigrationPreflight preflight = preflight(inventory);
+    NexusMigrationPreflight preflight = preflight(inventory, request.targetBlobStore());
     long jobId = migrationJobDao.create(
         defaultString(request.sourceNexusVersion(), DEFAULT_NEXUS_VERSION),
         request.sourceBaseUrl(),
@@ -112,8 +115,12 @@ public class NexusApiMigrationService {
         objectMapper).readInventory();
   }
 
-  private NexusMigrationPreflight preflight(NexusInventory inventory) {
+  NexusMigrationPreflight preflight(
+      NexusInventory inventory,
+      NexusMigrationTargetBlobStore targetBlobStore) {
     List<UnsupportedRepository> unsupported = new ArrayList<>();
+    List<RepositoryMigrationPlan> repositoriesToMigrate = new ArrayList<>();
+    List<GroupRepositoryMigrationPlan> groupRepositories = new ArrayList<>();
     List<ProxyRemoteRisk> proxyRemoteRisks = new ArrayList<>();
     int supported = 0;
     for (RepositoryDocument document : inventory.repositories()) {
@@ -126,11 +133,25 @@ public class NexusApiMigrationService {
         continue;
       }
       supported++;
+      repositoriesToMigrate.add(new RepositoryMigrationPlan(
+          name,
+          format,
+          type,
+          NexusRepositorySupport.recipe(format, type)
+              .map(RepositoryRecipe::name)
+              .orElse(null),
+          sourceBlobStoreName(document),
+          bool(value(document, "online"), true),
+          remoteUrl(document)));
+      if (repositoryTypeEnum(document) == RepositoryType.GROUP) {
+        groupRepositories.add(new GroupRepositoryMigrationPlan(name, format, groupMembers(document)));
+      }
       if ("proxy".equalsIgnoreCase(type)) {
         proxyRemoteRisks.add(new ProxyRemoteRisk(name, format, remoteUrl(document),
             remoteUrl(document) == null ? "missing_remote_url" : "not_checked"));
       }
     }
+    NexusSecurityPreflight security = securityPreflight(inventory.securityExport());
     List<String> missingPasswordUsers = passwordResetRequiredUsers(inventory.securityExport());
     List<String> warnings = new ArrayList<>(inventory.warnings());
     if (!unsupported.isEmpty()) {
@@ -144,11 +165,119 @@ public class NexusApiMigrationService {
         inventory.repositories().size(),
         supported,
         unsupported.size(),
+        blobStorePlans(inventory, targetBlobStore),
+        repositoriesToMigrate,
         unsupported,
+        groupRepositories,
         proxyRemoteRisks,
-        inventory.securityExport().users().size(),
+        security,
+        security.users(),
         missingPasswordUsers,
         warnings);
+  }
+
+  private List<BlobStoreMigrationPlan> blobStorePlans(
+      NexusInventory inventory,
+      NexusMigrationTargetBlobStore targetBlobStore) {
+    NexusMigrationTargetBlobStore template = targetBlobStore == null
+        ? NexusMigrationTargetBlobStore.defaultS3()
+        : targetBlobStore;
+    if (inventory.blobStores().isEmpty()) {
+      return List.of(new BlobStoreMigrationPlan(
+          template.name(),
+          "implicit",
+          template.name(),
+          defaultString(template.type(), "s3"),
+          template.endpoint(),
+          template.region(),
+          template.bucket(),
+          defaultString(template.prefix(), "")));
+    }
+    return inventory.blobStores().stream()
+        .map(source -> {
+          String sourceName = defaultString(string(source.get("name")), template.name());
+          return new BlobStoreMigrationPlan(
+              sourceName,
+              defaultString(firstString(source, "type", "blobStoreType"), "unknown"),
+              sourceName,
+              defaultString(template.type(), "s3"),
+              template.endpoint(),
+              template.region(),
+              template.bucket(),
+              prefixFor(template.prefix(), sourceName, template.name()));
+        })
+        .toList();
+  }
+
+  private NexusSecurityPreflight securityPreflight(NexusSecurityExport export) {
+    NexusSecurityExport source = export == null ? NexusSecurityExport.empty() : export;
+    NexusSecurityMigrationBatch batch = new NexusSecurityExportReader().read(source);
+    return new NexusSecurityPreflight(
+        batch.contentSelectors().size(),
+        batch.privileges().size(),
+        batch.roles().size(),
+        batch.users().size(),
+        batch.userRoleMappings().size(),
+        batch.realmOrder().size(),
+        batch.apiKeys().size(),
+        source.repositoryTargets().size(),
+        batch.anonymousConfig() == null
+            ? null
+            : new SecurityAnonymousPlan(
+                batch.anonymousConfig().enabled(),
+                batch.anonymousConfig().userSource(),
+                batch.anonymousConfig().userId(),
+                batch.anonymousConfig().realmName()),
+        batch.users().stream()
+            .map(user -> new SecurityUserPlan(
+                user.source(),
+                user.id(),
+                user.status(),
+                user.email(),
+                user.passwordHash() != null && !user.passwordHash().isBlank()))
+            .toList(),
+        batch.roles().stream()
+            .map(role -> new SecurityRolePlan(
+                role.id(),
+                role.source(),
+                role.name(),
+                role.readOnly(),
+                role.privileges(),
+                role.roles()))
+            .toList(),
+        batch.userRoleMappings().stream()
+            .map(mapping -> new SecurityUserRoleMappingPlan(
+                mapping.source(),
+                mapping.userId(),
+                mapping.roles()))
+            .toList(),
+        batch.apiKeys().stream()
+            .map(apiKey -> new SecurityApiKeyPlan(
+                apiKey.domain(),
+                apiKey.ownerSource(),
+                apiKey.ownerUserId(),
+                apiKey.displayName(),
+                apiKey.status(),
+                apiKey.rawApiKey() != null && !apiKey.rawApiKey().isBlank()))
+            .toList(),
+        batch.contentSelectors().stream()
+            .map(selector -> new SecurityContentSelectorPlan(
+                selector.name(),
+                selector.type(),
+                selector.format(),
+                selector.expression()))
+            .toList(),
+        batch.realmOrder());
+  }
+
+  private static String firstString(Map<String, Object> source, String... keys) {
+    for (String key : keys) {
+      String value = string(source.get(key));
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
   }
 
   ConfigMigrationCounts migrateConfig(NexusInventory inventory, NexusMigrationRequest request) {
@@ -715,20 +844,49 @@ public class NexusApiMigrationService {
       int repositories,
       int supportedRepositories,
       int unsupportedRepositories,
+      List<BlobStoreMigrationPlan> blobStorePlans,
+      List<RepositoryMigrationPlan> repositoriesToMigrate,
       List<UnsupportedRepository> unsupported,
+      List<GroupRepositoryMigrationPlan> groupRepositories,
       List<ProxyRemoteRisk> proxyRemoteRisks,
+      NexusSecurityPreflight security,
       int users,
       List<String> passwordResetRequiredUsers,
       List<String> warnings) {
 
     public NexusMigrationPreflight {
+      blobStorePlans = blobStorePlans == null ? List.of() : List.copyOf(blobStorePlans);
+      repositoriesToMigrate = repositoriesToMigrate == null ? List.of() : List.copyOf(repositoriesToMigrate);
       unsupported = unsupported == null ? List.of() : List.copyOf(unsupported);
+      groupRepositories = groupRepositories == null ? List.of() : List.copyOf(groupRepositories);
       proxyRemoteRisks = proxyRemoteRisks == null ? List.of() : List.copyOf(proxyRemoteRisks);
+      security = security == null ? NexusSecurityPreflight.empty() : security;
       passwordResetRequiredUsers = passwordResetRequiredUsers == null
           ? List.of()
           : List.copyOf(passwordResetRequiredUsers);
       warnings = warnings == null ? List.of() : List.copyOf(warnings);
     }
+  }
+
+  public record BlobStoreMigrationPlan(
+      String sourceName,
+      String sourceType,
+      String targetName,
+      String targetType,
+      String targetEndpoint,
+      String targetRegion,
+      String targetBucket,
+      String targetPrefix) {
+  }
+
+  public record RepositoryMigrationPlan(
+      String name,
+      String format,
+      String type,
+      String recipe,
+      String blobStoreName,
+      boolean online,
+      String remoteUrl) {
   }
 
   public record UnsupportedRepository(
@@ -738,11 +896,122 @@ public class NexusApiMigrationService {
       String reason) {
   }
 
+  public record GroupRepositoryMigrationPlan(
+      String repository,
+      String format,
+      List<String> members) {
+
+    public GroupRepositoryMigrationPlan {
+      members = members == null ? List.of() : List.copyOf(members);
+    }
+  }
+
   public record ProxyRemoteRisk(
       String repository,
       String format,
       String remoteUrl,
       String status) {
+  }
+
+  public record NexusSecurityPreflight(
+      int contentSelectors,
+      int privileges,
+      int roles,
+      int users,
+      int userRoleMappings,
+      int realms,
+      int apiKeys,
+      int repositoryTargets,
+      SecurityAnonymousPlan anonymous,
+      List<SecurityUserPlan> userDetails,
+      List<SecurityRolePlan> roleDetails,
+      List<SecurityUserRoleMappingPlan> userRoleMappingDetails,
+      List<SecurityApiKeyPlan> apiKeyDetails,
+      List<SecurityContentSelectorPlan> contentSelectorDetails,
+      List<String> realmOrder) {
+
+    public NexusSecurityPreflight {
+      userDetails = userDetails == null ? List.of() : List.copyOf(userDetails);
+      roleDetails = roleDetails == null ? List.of() : List.copyOf(roleDetails);
+      userRoleMappingDetails = userRoleMappingDetails == null ? List.of() : List.copyOf(userRoleMappingDetails);
+      apiKeyDetails = apiKeyDetails == null ? List.of() : List.copyOf(apiKeyDetails);
+      contentSelectorDetails = contentSelectorDetails == null ? List.of() : List.copyOf(contentSelectorDetails);
+      realmOrder = realmOrder == null ? List.of() : List.copyOf(realmOrder);
+    }
+
+    static NexusSecurityPreflight empty() {
+      return new NexusSecurityPreflight(
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          null,
+          List.of(),
+          List.of(),
+          List.of(),
+          List.of(),
+          List.of(),
+          List.of());
+    }
+  }
+
+  public record SecurityAnonymousPlan(
+      boolean enabled,
+      String userSource,
+      String userId,
+      String realmName) {
+  }
+
+  public record SecurityUserPlan(
+      String source,
+      String userId,
+      String status,
+      String email,
+      boolean passwordHashPresent) {
+  }
+
+  public record SecurityRolePlan(
+      String id,
+      String source,
+      String name,
+      boolean readOnly,
+      List<String> privileges,
+      List<String> childRoles) {
+
+    public SecurityRolePlan {
+      privileges = privileges == null ? List.of() : List.copyOf(privileges);
+      childRoles = childRoles == null ? List.of() : List.copyOf(childRoles);
+    }
+  }
+
+  public record SecurityUserRoleMappingPlan(
+      String source,
+      String userId,
+      List<String> roles) {
+
+    public SecurityUserRoleMappingPlan {
+      roles = roles == null ? List.of() : List.copyOf(roles);
+    }
+  }
+
+  public record SecurityApiKeyPlan(
+      String domain,
+      String ownerSource,
+      String ownerUserId,
+      String displayName,
+      String status,
+      boolean rawKeyPresent) {
+  }
+
+  public record SecurityContentSelectorPlan(
+      String name,
+      String type,
+      String format,
+      String expression) {
   }
 
   public record ConfigMigrationCounts(

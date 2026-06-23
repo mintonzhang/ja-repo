@@ -24,7 +24,7 @@
 | RubyGems | hosted / proxy / group | gem push/yank、gem 下载、compact 和 legacy index assets、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload、包下载、`repodata` metadata | 支持 `repodata` | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Raw | hosted / proxy / group | PUT 上传、GET/HEAD 读取、group/proxy fallback、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `RawRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
-| Docker / OCI | hosted / proxy / group | Registry V2 login、hosted push/pull、proxy pull、group pull、manifest、blob、tag、upload session、Docker Hub `library` namespace 补偿 | 支持 manifest/tag/blob metadata | 计划中 | `DockerRegistryBlackBoxCompatibilityTest`、Docker server/protocol 测试、[Docker / OCI 开发计划](dev/docker-repository-implementation-plan.md) |
+| Docker / OCI | hosted / proxy / group | Registry V2 login、hosted push/pull、proxy pull、group pull、manifest、blob、tag、upload session、cross-repo mount、referrers、content cleanup、Docker Hub `library` namespace 补偿 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data | `DockerRegistryBlackBoxCompatibilityTest`、Docker server/protocol 测试、OCI conformance workflow、[Docker / OCI 实现说明](dev/docker-repository-implementation-plan.md) |
 
 ## 管理和安全兼容
 
@@ -81,8 +81,8 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 ## 已知限制
 
 - kkrepo 不是 Nexus 内部机制的完整复刻。Karaf、OSGi、OrientDB、内嵌 Elasticsearch 和 Nexus task 子系统不是兼容目标。
-- Docker / OCI Registry 迁移尚未完成；repository metadata 和 data migration 仍需要 Docker 专项覆盖。
-- Docker connector listener 变更在启动时生效；运行时无重启端口重载、高级 TLS/SNI 管理、V1 search 和完整 OCI conformance workflow 尚未完成。
+- Docker / OCI 使用 Registry HTTP API V2 和 OCI Distribution；Docker Registry V1 API 与 `docker search` 不属于当前支持面，除非后续出现明确兼容需求再评估 search-only shim。
+- Docker connector listener 变更可通过 Docker operations endpoint 刷新；高级 connector TLS/SNI 管理属于部署侧能力。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

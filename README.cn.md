@@ -6,7 +6,7 @@
 [![Container](https://img.shields.io/badge/ghcr.io-kkrepo-blue)](https://github.com/klboke/kkrepo/pkgs/container/kkrepo)
 [![Security Policy](https://img.shields.io/badge/security-policy-green)](SECURITY.md)
 
-kkRepo 是一个独立的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 和 Raw 制品。
+kkRepo 是一个独立的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 制品。
 
 项目提供面向 Sonatype Nexus Repository 部署的客户端可见兼容和迁移支持，包括 `/repository/<repo>/...` URL 布局，以及迁移所需的权限认证行为兼容。kkRepo 使用 MySQL 存储元数据和共享运行状态，支持 OSS/S3 blob 存储，并按多副本部署设计。
 
@@ -56,6 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | PyPI | hosted / proxy / group | 支持 twine 上传和管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Go | proxy / group | Go module proxy 以只读代理为主，不支持 hosted 上传 | 支持 | proxy 可作为可选仓库迁移 |
 | Helm | hosted / proxy | 支持 chart push、PUT 上传和管理台上传 | 支持 index.yaml | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
+| Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Yum | hosted / proxy / group | 支持 RPM 上传和管理台上传 | 支持 repodata | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
@@ -71,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 2. 在 `Nexus Metadata` 页面先执行 `Run preflight`，确认无阻塞问题后执行 `Run migration`。
 3. 在 `Nexus Repository Data` 页面先执行 `Sync metadata` 迁移仓库元数据，再执行 `Sync packages` 迁移 blob 真实数据。
 4. 首次仓库数据迁移时 `Metadata since` 保持为空，扫描全量数据；后续迁移可以指定 `Metadata since` 做增量。
-5. 迁移完成后，把原制品仓库域名指向 kkRepo，客户端配置无需修改。
+5. 迁移完成后，把原制品仓库域名指向 kkRepo。非 Docker 客户端可以继续使用相同 `/repository/<repo>/...` URL；Docker 客户端应保持相同 `/v2/...` registry 入口、仓库名和 connector/path-based routing 形态。
 
 迁移支持中断后继续，已迁移完成的数据会跳过。完整流程见 [Nexus 迁移说明](docs/zh/nexus-migration-guide.md)。
 
@@ -80,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | 维度 | Sonatype Nexus Repository OSS / Community Edition | kkRepo                                                                                                        |
 | --- | --- |-------------------------------------------------------------------------------------------------------------------|
 | 产品定位 | 通用制品仓库管理平台，功能完整，覆盖大量官方格式和管理能力 | 提供面向迁移的客户端行为、权限模型和 `/repository/<repo>/...` URL 布局兼容，同时采用 MySQL-first、OSS/S3-first、适合多副本部署的架构 |
-| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
+| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、PyPI、Go、Helm、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
 | 使用限制 | Community Edition 面向个人和小团队，官方限制为最多 40,000 components、100,000 requests/day；超过阈值后会暂停新增 component，直到用量回到限制以下 | 不内置 Community Edition 这类版本授权用量限制；容量边界由 MySQL、OSS/S3、运行副本数和部署规格决定，适合按实际业务规模扩容                                      |
 | 高可用部署 | 开源版适合单实例或基础 Kubernetes 部署；官方 HA deployment 属于 Pro 能力 | 从设计上默认支持多副本：session、认证 ticket、catalog 水位、锁、迁移进度和短生命周期协同状态都落 MySQL，进程内缓存只作为可重建热缓存                                  |
 | 稳定性和升级 | 版本边界复杂：3.70.x 是最后支持 OrientDB 的版本；3.71.0 起新安装默认 H2，但 H2 仍是内嵌数据库；Community Edition 到 3.77.0+ 才支持免费使用外部 PostgreSQL；3.88.0 起搜索才完全改为 SQL、替代 Elasticsearch。旧版 OrientDB/Elasticsearch/本地数据目录组合升级窗口重，文件损坏后恢复高度依赖备份、修复任务和人工介入 | 运行时直接 MySQL-first，不依赖 OrientDB 和内嵌 Elasticsearch；核心状态在 MySQL，blob 在 OSS/S3/File blob store，缓存和索引均可重建，更适合滚动升级、故障切换和数据恢复 |
@@ -105,7 +106,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 ![前台仓库列表](docs/img/img_7.png)
 
-按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
+按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
 
 ![前台制品搜索](docs/img/img.png)
 
@@ -141,9 +142,9 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 ## 路线图
 
-后续仓库格式迭代路线：
+仓库格式路线图：
 
-1. Docker / OCI Registry - 进行中（[开发计划](docs/zh/dev/docker-repository-implementation-plan.md)）
+1. Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
 2. APT / Debian
 3. Cargo / Rust
 4. Terraform Provider / Module Registry

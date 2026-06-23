@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -22,9 +23,18 @@ public class DockerGroupService {
   private final DockerProxyService proxy;
   private final DockerManifestStore manifestStore;
   private final GroupMemberAssetCache groupMemberAssetCache;
+  private final DockerMetrics metrics;
 
   public DockerGroupService(DockerHostedService hosted, DockerProxyService proxy) {
-    this(hosted, proxy, null, null);
+    this(hosted, proxy, null, null, (DockerMetrics) null);
+  }
+
+  public DockerGroupService(
+      DockerHostedService hosted,
+      DockerProxyService proxy,
+      DockerManifestStore manifestStore,
+      GroupMemberAssetCache groupMemberAssetCache) {
+    this(hosted, proxy, manifestStore, groupMemberAssetCache, (DockerMetrics) null);
   }
 
   @Autowired
@@ -32,11 +42,23 @@ public class DockerGroupService {
       DockerHostedService hosted,
       DockerProxyService proxy,
       DockerManifestStore manifestStore,
-      GroupMemberAssetCache groupMemberAssetCache) {
+      GroupMemberAssetCache groupMemberAssetCache,
+      ObjectProvider<DockerMetrics> metricsProvider) {
+    this(hosted, proxy, manifestStore, groupMemberAssetCache,
+        metricsProvider == null ? null : metricsProvider.getIfAvailable());
+  }
+
+  public DockerGroupService(
+      DockerHostedService hosted,
+      DockerProxyService proxy,
+      DockerManifestStore manifestStore,
+      GroupMemberAssetCache groupMemberAssetCache,
+      DockerMetrics metrics) {
     this.hosted = hosted;
     this.proxy = proxy;
     this.manifestStore = manifestStore;
     this.groupMemberAssetCache = groupMemberAssetCache;
+    this.metrics = metrics;
   }
 
   public DockerResponse getManifest(RepositoryRuntime group, String imageName, String reference, boolean headOnly) {
@@ -60,6 +82,7 @@ public class DockerGroupService {
         if (e.code() != DockerErrorCode.MANIFEST_UNKNOWN && e.code() != DockerErrorCode.NAME_UNKNOWN) {
           throw e;
         }
+        recordCache(group, "group_member_manifest", "stale");
       }
     }
     for (RepositoryRuntime member : group.members()) {
@@ -91,6 +114,7 @@ public class DockerGroupService {
         if (e.code() != DockerErrorCode.BLOB_UNKNOWN && e.code() != DockerErrorCode.NAME_UNKNOWN) {
           throw e;
         }
+        recordCache(group, "group_member_blob", "stale");
       }
     }
     for (RepositoryRuntime member : group.members()) {
@@ -199,10 +223,12 @@ public class DockerGroupService {
       } catch (DockerProtocolException ignored) {
       }
     }
-    return Map.of(
+    Map<String, Object> body = Map.of(
         "schemaVersion", 2,
         "mediaType", DockerConstants.MEDIA_TYPE_OCI_INDEX,
         "manifests", List.copyOf(descriptors.values()));
+    recordReferrers(group, "merged", descriptors.size());
+    return body;
   }
 
   private DockerResponse getManifestFromMember(
@@ -240,6 +266,7 @@ public class DockerGroupService {
       return;
     }
     groupMemberAssetCache.put(group, manifestKey(imageName, reference), NexusCacheType.METADATA, member.id());
+    recordCache(group, "group_member_manifest", "store");
     if (manifestStore == null) {
       return;
     }
@@ -247,9 +274,11 @@ public class DockerGroupService {
       DockerManifestStore.StoredManifest stored = manifestStore.getManifest(member, imageName, reference);
       groupMemberAssetCache.put(group, blobKey(imageName, DockerDigest.parse(stored.manifest().digest())),
           NexusCacheType.CONTENT, member.id());
+      recordCache(group, "group_member_blob", "store");
       for (String digest : manifestStore.referencedDigests(stored)) {
         groupMemberAssetCache.put(group, blobKey(imageName, DockerDigest.parse(digest)),
             NexusCacheType.CONTENT, member.id());
+        recordCache(group, "group_member_blob", "store_reference");
       }
     } catch (DockerProtocolException ignored) {
       // The member hit is still useful; descriptor-to-blob hints are best-effort.
@@ -259,25 +288,34 @@ public class DockerGroupService {
   private void rememberBlobHit(RepositoryRuntime group, RepositoryRuntime member, String imageName, DockerDigest digest) {
     if (groupMemberAssetCache != null) {
       groupMemberAssetCache.put(group, blobKey(imageName, digest), NexusCacheType.CONTENT, member.id());
+      recordCache(group, "group_member_blob", "store");
     }
   }
 
   private java.util.Optional<RepositoryRuntime> cachedManifestMember(
       RepositoryRuntime group, String imageName, String reference) {
     if (groupMemberAssetCache == null) {
+      recordCache(group, "group_member_manifest", "disabled");
       return java.util.Optional.empty();
     }
-    return groupMemberAssetCache.get(group, manifestKey(imageName, reference), NexusCacheType.METADATA)
+    java.util.Optional<RepositoryRuntime> member = groupMemberAssetCache
+        .get(group, manifestKey(imageName, reference), NexusCacheType.METADATA)
         .flatMap(memberId -> findMember(group, memberId));
+    recordCache(group, "group_member_manifest", member.isPresent() ? "hit" : "miss");
+    return member;
   }
 
   private java.util.Optional<RepositoryRuntime> cachedBlobMember(
       RepositoryRuntime group, String imageName, DockerDigest digest) {
     if (groupMemberAssetCache == null) {
+      recordCache(group, "group_member_blob", "disabled");
       return java.util.Optional.empty();
     }
-    return groupMemberAssetCache.get(group, blobKey(imageName, digest), NexusCacheType.CONTENT)
+    java.util.Optional<RepositoryRuntime> member = groupMemberAssetCache
+        .get(group, blobKey(imageName, digest), NexusCacheType.CONTENT)
         .flatMap(memberId -> findMember(group, memberId));
+    recordCache(group, "group_member_blob", member.isPresent() ? "hit" : "miss");
+    return member;
   }
 
   private java.util.Optional<RepositoryRuntime> findMember(RepositoryRuntime group, long repositoryId) {
@@ -311,6 +349,18 @@ public class DockerGroupService {
       }
     });
     return Map.copyOf(target);
+  }
+
+  private void recordCache(RepositoryRuntime runtime, String cache, String result) {
+    if (metrics != null) {
+      metrics.cache(cache, runtime, result);
+    }
+  }
+
+  private void recordReferrers(RepositoryRuntime runtime, String outcome, long count) {
+    if (metrics != null) {
+      metrics.referrers(runtime, outcome, count);
+    }
   }
 
   private static void ensureGroup(RepositoryRuntime runtime) {

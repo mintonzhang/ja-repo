@@ -323,6 +323,13 @@ Repository-level Docker connector ports can also expose the standard Docker imag
 <host>:<repo-port>/<image>:<tag>
 ```
 
+For local development, run the real client matrix script to cover hosted
+push/pull, proxy pull, group pull, and optional ORAS/Skopeo smoke checks:
+
+```bash
+scripts/docker-compat/client-compat.sh
+```
+
 Do not assume Docker pull/push works through `/repository/<repo>/...`.
 
 ## Troubleshooting Client Configuration

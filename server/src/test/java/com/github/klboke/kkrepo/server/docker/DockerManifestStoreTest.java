@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 
 class DockerManifestStoreTest {
   @Test
@@ -114,6 +116,15 @@ class DockerManifestStoreTest {
     assertEquals(1, deleted);
     verify(assetDao).deleteAssetById(200L);
     verify(assetDao).markBlobDeletedIfUnreferenced(300L, "docker manifest deleted");
+  }
+
+  @Test
+  void deleteReferenceHasTransactionBoundaryForMandatoryDaoDelete() throws Exception {
+    Transactional transactional = DockerManifestStore.class
+        .getMethod("deleteReference", RepositoryRuntime.class, String.class, String.class)
+        .getAnnotation(Transactional.class);
+
+    assertNotNull(transactional);
   }
 
   private static RepositoryRuntime runtime(String writePolicy) {

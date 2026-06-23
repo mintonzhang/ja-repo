@@ -349,3 +349,118 @@ Override repository names with `COMPAT_RAW_HOSTED_REPOSITORY`,
 `COMPAT_RAW_PROXY_REPOSITORY`, and `COMPAT_RAW_GROUP_REPOSITORY`. Override the proxy upstream
 with `COMPAT_RAW_REMOTE_URL` and `COMPAT_RAW_PROXY_PROBE_PATH`; defaults are
 `https://raw.githubusercontent.com/github/gitignore/main` and `Java.gitignore`.
+
+## Docker Registry V2 Compatibility
+
+The Docker Registry V2 checks are disabled by default. They compare a Nexus Docker
+connector with a kkrepo Docker connector and can optionally cover path-based routing,
+proxy, group, and hosted write-policy repositories.
+
+Minimal hosted connector check:
+
+```bash
+COMPAT_DOCKER_ENABLED=true \
+DOCKER_NEXUS_COMPAT_BASE_URL=http://192.168.215.6:28091 \
+DOCKER_NEXUS_PLUS_COMPAT_BASE_URL=http://127.0.0.1:18183 \
+NEXUS_COMPAT_USERNAME=admin \
+NEXUS_COMPAT_PASSWORD=123456 \
+KKREPO_COMPAT_USERNAME=admin \
+KKREPO_COMPAT_PASSWORD=123456 \
+mvn -pl compat-test -am \
+  -DfailIfNoTests=false \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dcompat.docker.pathBased=false \
+  -Dcompat.docker.writeEnabled=true \
+  -Dtest=DockerRegistryBlackBoxCompatibilityTest \
+  test
+```
+
+Extended Docker matrix:
+
+```bash
+COMPAT_DOCKER_ENABLED=true \
+DOCKER_NEXUS_COMPAT_BASE_URL=http://192.168.215.6:28091 \
+DOCKER_NEXUS_PLUS_COMPAT_BASE_URL=http://127.0.0.1:18183 \
+DOCKER_NEXUS_PLUS_PATH_BASED_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+DOCKER_NEXUS_PROXY_COMPAT_BASE_URL=http://192.168.215.6:28092 \
+DOCKER_NEXUS_PLUS_PROXY_COMPAT_BASE_URL=http://127.0.0.1:18181 \
+DOCKER_NEXUS_GROUP_COMPAT_BASE_URL=http://192.168.215.6:28093 \
+DOCKER_NEXUS_PLUS_GROUP_COMPAT_BASE_URL=http://127.0.0.1:18182 \
+DOCKER_NEXUS_ALLOW_ONCE_COMPAT_BASE_URL=http://192.168.215.6:28094 \
+DOCKER_NEXUS_PLUS_ALLOW_ONCE_COMPAT_BASE_URL=http://127.0.0.1:18184 \
+DOCKER_NEXUS_DENY_COMPAT_BASE_URL=http://192.168.215.6:28095 \
+DOCKER_NEXUS_PLUS_DENY_COMPAT_BASE_URL=http://127.0.0.1:18185 \
+NEXUS_COMPAT_USERNAME=admin \
+NEXUS_COMPAT_PASSWORD=123456 \
+KKREPO_COMPAT_USERNAME=admin \
+KKREPO_COMPAT_PASSWORD=123456 \
+mvn -pl compat-test -am \
+  -DfailIfNoTests=false \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dcompat.docker.pathBased=false \
+  -Dcompat.docker.writeEnabled=true \
+  -Dcompat.docker.repository=kkrepo-docker-hosted \
+  -Dcompat.docker.proxyImage=library/alpine \
+  -Dcompat.docker.proxyReference=latest \
+  -Dcompat.docker.groupImage=kkrepo-compat/upload-probe \
+  -Dcompat.docker.groupReference=latest \
+  -Dtest=DockerRegistryBlackBoxCompatibilityTest \
+  test
+```
+
+Notes:
+
+- Docker connector URLs should point at the registry connector port, not the Nexus UI/API port.
+- Use `-Dcompat.docker.pathBased=false` when the base URLs are repository-specific connector ports.
+- `DOCKER_NEXUS_PLUS_PATH_BASED_COMPAT_BASE_URL` should point at the shared kkrepo service port
+  that serves `/v2/<repo>/<image>...`.
+- Proxy/group/write-policy scenarios are skipped unless all endpoints for that scenario are set.
+
+Real Docker client matrix:
+
+```bash
+scripts/docker-compat/client-compat.sh
+```
+
+By default the script checks the local dev Docker set: hosted `127.0.0.1:18180`,
+proxy `127.0.0.1:18181`, and group `127.0.0.1:18182` with `admin/123456`.
+Override registries and images
+with `DOCKER_COMPAT_HOSTED_REGISTRY`, `DOCKER_COMPAT_PROXY_REGISTRY`,
+`DOCKER_COMPAT_GROUP_REGISTRY`, `DOCKER_COMPAT_SOURCE_IMAGE`,
+`DOCKER_COMPAT_PROXY_IMAGE`, and `DOCKER_COMPAT_HOSTED_IMAGE`. `oras` and
+`skopeo` are optional in `auto` mode; set `DOCKER_COMPAT_RUN_ORAS=true` or
+`DOCKER_COMPAT_RUN_SKOPEO=true` to require them.
+
+OCI Distribution conformance check:
+
+```bash
+OCI_ROOT_URL=http://127.0.0.1:18180 \
+OCI_NAMESPACE=kkrepo-conformance \
+OCI_USERNAME=admin \
+OCI_PASSWORD=123456 \
+OCI_TEST_PULL=1 \
+OCI_TEST_PUSH=1 \
+OCI_TEST_CONTENT_DISCOVERY=1 \
+OCI_TEST_CONTENT_MANAGEMENT=1 \
+DOCKER_OCI_CONFORMANCE_USE_DOCKER=1 \
+scripts/docker-compat/oci-conformance.sh
+```
+
+The wrapper uses a local `oci-conformance` binary when available, or the
+`ghcr.io/opencontainers/distribution-spec/conformance:latest` image when Docker mode is enabled.
+Reports are written under `target/oci-conformance/docker` by default.
+GitHub Actions also includes a manual/label-gated `Docker OCI Conformance`
+workflow. Add the `run-docker-oci-conformance` label to a PR, or start it with
+`workflow_dispatch`, to build kkrepo, create a Docker hosted repository, refresh
+the connector, and run the same wrapper.
+
+Docker migration end-to-end check:
+
+```bash
+scripts/docker-compat/migration-e2e.sh
+```
+
+The migration script uses the local Nexus REST endpoint `http://localhost:28090/`,
+pushes a fixture image to `docker-hosted`, starts repository-data metadata and
+package migration for only that Docker repository, then pulls the image from the
+kkrepo Docker connector `127.0.0.1:18183`.

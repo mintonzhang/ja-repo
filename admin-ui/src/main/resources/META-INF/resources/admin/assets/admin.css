@@ -85,6 +85,7 @@ select {
 .migration-result {
   margin: 12px 10px 24px;
   border-top: 1px solid var(--line);
+  overflow-x: auto;
   padding-top: 12px;
 }
 
@@ -112,6 +113,43 @@ select {
   margin-top: 4px;
   color: #303030;
   font-size: 18px;
+}
+
+.docker-ops-layout {
+  display: grid;
+  gap: 12px;
+  padding: 0 10px 24px;
+}
+
+.ops-panel {
+  border-top: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.ops-panel-head {
+  border-bottom: 1px solid var(--line);
+  background: var(--header);
+  color: #333333;
+  font-weight: 700;
+  padding: 9px 10px;
+}
+
+.compact-summary {
+  margin: 10px;
+}
+
+.docker-connector-table {
+  min-width: 980px;
+}
+
+.ops-status {
+  min-height: 18px;
+  margin: 0 10px 12px;
+  color: #56615f;
+}
+
+.ops-status.error {
+  color: #a12622;
 }
 
 .migration-progress-panel {
@@ -208,6 +246,17 @@ select {
 .nx-table.compact td {
   height: 34px;
   padding: 6px 8px;
+}
+
+.migration-detail-table {
+  min-width: 860px;
+}
+
+.migration-detail-table th,
+.migration-detail-table td {
+  max-width: 340px;
+  white-space: normal;
+  vertical-align: top;
 }
 
 .code-panel {
@@ -747,6 +796,14 @@ body {
   color: #4b5563;
   font-size: 13px;
   font-weight: 700;
+}
+
+.form-note {
+  margin: 0;
+  color: #65746f;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .form-grid input,

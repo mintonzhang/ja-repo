@@ -67,7 +67,10 @@ class RepositoryDataMigrationService {
         request.sourceUsername(),
         request.sourcePassword(),
         objectMapper).readInventory();
-    List<SourceRepository> sourceRepositories = sourceRepositories(inventory, request.backupProxyRepositories());
+    List<SourceRepository> sourceRepositories = sourceRepositories(
+        inventory,
+        request.repositories(),
+        request.backupProxyRepositories());
     if (sourceRepositories.isEmpty()) {
       throw new IllegalArgumentException("No supported source repositories matched the request");
     }
@@ -171,7 +174,10 @@ class RepositoryDataMigrationService {
     migrationDao.updateMigrationJobSummary(jobId, jobStatus, status.toSummary(jobStatus));
   }
 
-  private List<SourceRepository> sourceRepositories(NexusInventory inventory, List<String> backupProxyRepositories) {
+  private List<SourceRepository> sourceRepositories(
+      NexusInventory inventory,
+      List<String> requestedRepositories,
+      List<String> backupProxyRepositories) {
     LinkedHashMap<String, SourceRepository> sourcesByName = new LinkedHashMap<>();
     for (RepositoryDocument document : inventory.repositories()) {
       SourceRepository source = sourceRepository(document);
@@ -180,11 +186,31 @@ class RepositoryDataMigrationService {
       }
     }
     LinkedHashMap<String, SourceRepository> selected = new LinkedHashMap<>();
-    sourcesByName.values().stream()
-        .filter(source -> source.type() == RepositoryType.HOSTED && source.supported())
-        .sorted(Comparator.comparing(SourceRepository::name))
-        .map(source -> source.withMigrationMode(MODE_HOSTED))
-        .forEach(source -> selected.put(source.name(), source));
+    List<String> requestedHosted = normalizeNames(requestedRepositories);
+    if (requestedHosted.isEmpty()) {
+      sourcesByName.values().stream()
+          .filter(source -> source.type() == RepositoryType.HOSTED && source.supported())
+          .sorted(Comparator.comparing(SourceRepository::name))
+          .map(source -> source.withMigrationMode(MODE_HOSTED))
+          .forEach(source -> selected.put(source.name(), source));
+    } else {
+      List<String> invalid = new ArrayList<>();
+      for (String name : requestedHosted) {
+        SourceRepository source = sourcesByName.get(name);
+        if (source == null) {
+          invalid.add(name + " (not found)");
+        } else if (source.type() != RepositoryType.HOSTED) {
+          invalid.add(name + " (" + source.type().name().toLowerCase(Locale.ROOT) + ")");
+        } else if (!source.supported()) {
+          invalid.add(name + " (unsupported format " + source.format().id() + ")");
+        } else {
+          selected.put(source.name(), source.withMigrationMode(MODE_HOSTED));
+        }
+      }
+      if (!invalid.isEmpty()) {
+        throw new IllegalArgumentException("Repositories are invalid for hosted data migration: " + invalid);
+      }
+    }
 
     List<String> invalid = new ArrayList<>();
     for (String name : normalizeNames(backupProxyRepositories)) {
@@ -274,6 +300,7 @@ class RepositoryDataMigrationService {
     options.put("checksumValidation", checksumValidation);
     options.put("packageMigrationEnabled", false);
     options.put("repositories", repositories.stream().map(SourceRepository::name).toList());
+    options.put("requestedRepositories", normalizeNames(request.repositories()));
     options.put("backupProxyRepositories", normalizeNames(request.backupProxyRepositories()));
     if (request.metadataSince() != null) {
       options.put("metadataSince", request.metadataSince().toString());
@@ -367,6 +394,7 @@ class RepositoryDataMigrationService {
       Integer concurrency,
       Boolean checksumValidation,
       Instant metadataSince,
+      List<String> repositories,
       List<String> backupProxyRepositories) {
   }
 

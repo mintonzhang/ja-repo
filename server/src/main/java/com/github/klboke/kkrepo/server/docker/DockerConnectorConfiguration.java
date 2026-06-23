@@ -14,7 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.catalina.connector.Connector;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
@@ -22,55 +22,63 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class DockerConnectorConfiguration {
+  static final int CONNECTOR_REPOSITORY_FILTER_ORDER = DockerAuthFilter.FILTER_ORDER - 1;
+
   public static final String CONNECTOR_REPOSITORY_ATTRIBUTE =
       DockerConnectorConfiguration.class.getName() + ".REPOSITORY";
 
   @Bean
   WebServerFactoryCustomizer<TomcatServletWebServerFactory> dockerConnectorCustomizer(
-      RepositoryDao repositoryDao,
-      @Value("${kkrepo.docker.connector.enabled:true}") boolean enabled) {
+      DockerConnectorManager connectorManager) {
     return factory -> {
-      if (!enabled) {
+      DockerConnectorManager.Snapshot snapshot = connectorManager.refresh();
+      if (!snapshot.enabled()) {
         return;
       }
-      for (Map.Entry<Integer, String> entry : connectorPorts(repositoryDao).entrySet()) {
+      DockerConnectorManager.ConnectorTuning tuning = snapshot.tuning();
+      for (Map.Entry<Integer, String> entry : snapshot.repositoriesByPort().entrySet()) {
         Connector connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
         connector.setPort(entry.getKey());
-        connector.setProperty("connectionTimeout", "60000");
-        connector.setProperty("maxConnections", "2000");
+        connector.setProperty("connectionTimeout", Integer.toString(tuning.connectionTimeoutMillis()));
+        connector.setProperty("maxConnections", Integer.toString(tuning.maxConnections()));
+        connector.setProperty("acceptCount", Integer.toString(tuning.acceptCount()));
         factory.addAdditionalConnectors(connector);
       }
     };
   }
 
   @Bean
-  Filter dockerConnectorRepositoryFilter(ObjectProvider<RepositoryDao> repositoryDaoProvider) {
-    return new Filter() {
-      private volatile Map<Integer, String> ports;
-
+  FilterRegistrationBean<Filter> dockerConnectorRepositoryFilter(
+      ObjectProvider<DockerConnectorManager> connectorManagerProvider) {
+    FilterRegistrationBean<Filter> registration = new FilterRegistrationBean<>();
+    registration.setName("dockerConnectorRepositoryFilter");
+    registration.setOrder(CONNECTOR_REPOSITORY_FILTER_ORDER);
+    registration.setFilter(new Filter() {
       @Override
       public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
           throws IOException, ServletException {
         if (request instanceof HttpServletRequest http) {
-          String repository = currentPorts(repositoryDaoProvider).get(http.getLocalPort());
-          if (repository != null && http.getRequestURI().startsWith("/v2/")) {
+          DockerConnectorManager manager = connectorManagerProvider.getIfAvailable();
+          String repository = manager == null ? null : manager.repositoryForPort(http.getLocalPort());
+          if (repository != null && isDockerConnectorRequest(http.getRequestURI())) {
             http.setAttribute(CONNECTOR_REPOSITORY_ATTRIBUTE, repository);
           }
         }
         chain.doFilter(request, response);
       }
+    });
+    registration.addUrlPatterns("/v2");
+    registration.addUrlPatterns("/v2/*");
+    registration.addUrlPatterns("/service/rest/v1/docker/token");
+    registration.setDispatcherTypes(jakarta.servlet.DispatcherType.REQUEST, jakarta.servlet.DispatcherType.ASYNC);
+    return registration;
+  }
 
-      private Map<Integer, String> currentPorts(ObjectProvider<RepositoryDao> provider) {
-        Map<Integer, String> local = ports;
-        if (local != null) {
-          return local;
-        }
-        RepositoryDao dao = provider.getIfAvailable();
-        local = dao == null ? Map.of() : connectorPorts(dao);
-        ports = local;
-        return local;
-      }
-    };
+  private static boolean isDockerConnectorRequest(String uri) {
+    return uri.equals("/v2")
+        || uri.equals("/v2/")
+        || uri.startsWith("/v2/")
+        || uri.equals("/service/rest/v1/docker/token");
   }
 
   static Map<Integer, String> connectorPorts(RepositoryDao repositoryDao) {
@@ -79,31 +87,15 @@ public class DockerConnectorConfiguration {
       if (record.format() != RepositoryFormat.DOCKER || record.attributes() == null) {
         continue;
       }
-      Object raw = record.attributes().get("docker");
-      if (!(raw instanceof Map<?, ?> docker)) {
+      DockerConnectorManager.DockerSettings docker = DockerConnectorManager.dockerSettings(record);
+      if (docker == null) {
         continue;
       }
-      Object enabled = docker.get("connectorEnabled");
-      Object port = docker.get("connectorPort");
-      if (port == null || (enabled instanceof Boolean b && !b)) {
+      if (!docker.connectorEnabled() || docker.connectorPort() == null) {
         continue;
       }
-      Integer parsed = parsePort(port);
-      if (parsed != null) {
-        ports.put(parsed, record.name());
-      }
+      ports.put(docker.connectorPort(), record.name());
     }
     return Map.copyOf(ports);
-  }
-
-  private static Integer parsePort(Object value) {
-    if (value instanceof Number number) {
-      return number.intValue();
-    }
-    try {
-      return Integer.parseInt(value.toString());
-    } catch (RuntimeException ignored) {
-      return null;
-    }
   }
 }

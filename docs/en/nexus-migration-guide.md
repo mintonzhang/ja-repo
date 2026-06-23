@@ -2,7 +2,7 @@
 
 This document describes prerequisites, execution order, incremental migration, and domain cutover when migrating from Nexus Repository to kkrepo.
 
-kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and other client configurations do not need to change.
+kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and other non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
 
 ## Migration Flow Overview
 
@@ -56,6 +56,18 @@ Steps:
 6. If failures occur, fix source permission, network, or storage issues, click `Retry failed`, then continue `Sync packages`.
 
 `Sync metadata` only discovers and records assets to migrate. It does not download real blobs. Real package files are migrated by `Sync packages`.
+
+### Docker End-To-End Validation
+
+Docker / OCI repository migration uses the same two-step `Nexus Repository Data` flow. For local validation, pass `repositories` or `repositoryNames` so the job only scans the Docker hosted repository under test instead of every hosted repository.
+
+The local reference Nexus defaults to `http://localhost:28090/`:
+
+```bash
+scripts/docker-compat/migration-e2e.sh
+```
+
+The script pushes a fixture image to the source `docker-hosted` repository, migrates only that Docker hosted repository's metadata and blob data, then pulls the same image from the kkrepo Docker connector and verifies the digest.
 
 ### Incremental Migration
 

@@ -1,6 +1,22 @@
-# Docker Repository Research And Development Plan
+# Docker Repository Implementation Notes
 
-This document plans the Docker/OCI repository format for kkrepo. The goal is not to reinvent a container registry protocol, but to implement the compatible overlap between Nexus Docker repository behavior, Docker Registry HTTP API V2, and OCI Distribution, while fitting the kkrepo MySQL + OSS/S3 + multi-replica architecture.
+This document records the Docker/OCI repository design and implementation notes for kkrepo. The goal is not to reinvent a container registry protocol, but to implement the compatible overlap between Nexus Docker repository behavior, Docker Registry HTTP API V2, and OCI Distribution, while fitting the kkrepo MySQL + OSS/S3 + multi-replica architecture.
+
+## Current Support
+
+Docker / OCI is implemented as a supported repository format:
+
+- `docker-hosted`, `docker-proxy`, and `docker-group` recipes.
+- Registry HTTP API V2 `/v2/...` routing with both shared path-based routing and repository-level connector ports.
+- Bearer token login, repository permissions, anonymous/read/write/delete authorization, and Docker challenge/token behavior.
+- Hosted push/pull, resumable upload sessions, streaming upload completion, blob range reads, manifest/tag/blob delete, cross-repository blob mount, and cleanup policy workers.
+- Proxy pull with upstream registry auth, Docker Hub `library` namespace compensation, manifest/blob/tag caching, negative cache, digest verification, and upstream metrics.
+- Group pull with member-order resolution, group member cache, and cache invalidation after member content changes.
+- OCI image manifests/indexes, subject/referrers indexing, `/referrers/<digest>`, `artifactType` filtering, and `OCI-Subject` responses.
+- Docker browse details, Docker migration validation scripts, real-client compatibility scripts, and manual/label-gated OCI conformance workflow.
+- Docker-specific observability metrics for uploads, mounts, cache events, digest verification, cleanup, referrers, active transfers, and proxy upstream calls.
+
+The Docker Registry V1 API and `docker search` are intentionally not part of the supported surface. Modern Docker/OCI workflows use Registry V2 and OCI Distribution; a search-only compatibility shim can be reconsidered if a concrete Nexus migration requires it.
 
 ## Research Baseline
 
@@ -53,13 +69,11 @@ Key conclusions:
    - Verify hosted push/pull, proxy pull, and group pull with `docker`, `oras`, or `skopeo`.
    - Add OCI Distribution conformance as supplemental verification, enabling Pull, Push, Content Discovery, and Content Management in phases.
 
-### Recommended Second Phase
+### Optional Hardening And Non-Goals
 
-- OCI referrers API: `GET /v2/<repo>/<image>/referrers/<digest>` with `artifactType` filtering.
-- Persist OCI subjects and backfill referrers indexes for cosign signatures, SBOMs, attestations, and similar artifacts.
-- `/v2/_catalog`, available only to administrators or explicitly allowed registry scopes.
-- Docker V1 API and `docker search` compatibility. Nexus documentation still mentions V1 fallback, but modern Docker/OCI workflows should not depend on it, so this is lower priority than V2/OCI.
-- Dynamic connector lifecycle enhancements: no-restart listener reload when a Docker repository port is added or changed, port release, certificate/SNI handling, port-level access logs, and finer-grained rate limits. The first phase should implement repository-level connector port attributes and startup-time port mapping, which is enough for multi-repository port isolation. Full dynamic lifecycle support can follow later.
+- Advanced connector TLS/SNI management and port-level access-log integration are deployment-specific hardening items.
+- Cross-blob-store server-side copy for blob mount is an optional optimization. The implemented behavior falls back to normal upload when source and target blob stores differ.
+- Docker Registry V1 API and `docker search` are non-goals unless a future migration requires a search-only compatibility shim.
 
 ## URL And Routing Design
 
@@ -640,9 +654,9 @@ Docker implementation must satisfy:
 | Concurrent tag overwrite | Tag pointer corruption | `docker_tag` unique constraint plus transactional updates |
 | DELETE and GC delete blobs too early | Existing images fail to pull | Reference-table-driven GC; DELETE first performs logical deletion |
 
-## Recommended First Deliverable
+## Delivered Scope
 
-Define the first deliverable as:
+The supported Docker / OCI scope includes:
 
 - Support `docker-hosted`.
 - Support repository-level Docker connector ports and port-based `/v2/<image>`; optionally support a shared path-based `/v2/<repo>/<image>` entrypoint.
@@ -650,6 +664,6 @@ Define the first deliverable as:
 - Support Docker schema2 and OCI image manifest/index.
 - Support normal `docker push`, `docker pull`, `docker tag`, and `docker manifest inspect`.
 - Support tag list and manifest/blob HEAD.
-- Proxy and group are now part of the implemented core path. Do not yet commit to migration, GC, V1 search, no-restart port reloads, full OCI conformance workflows, or advanced connector TLS/SNI management.
+- Support Docker proxy/group read paths, cross-repository blob mount, referrers, content management cleanup, migration validation, OCI conformance workflow, and Docker-specific metrics.
 
-The next deliverables should focus on migration, GC, connector lifecycle hardening, and full OCI conformance workflows.
+Remaining non-core enhancements are connector TLS/SNI/access-log hardening, optional cross-blob-store copy optimization, and a possible search-only shim if real Nexus compatibility demand appears.

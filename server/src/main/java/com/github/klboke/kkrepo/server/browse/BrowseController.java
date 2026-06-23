@@ -38,6 +38,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class BrowseController {
   private final RepositoryDao repositoryDao;
   private final BrowseNodeDao browseNodeDao;
+  private final DockerBrowseService dockerBrowseService;
   private final BrowseAssetDetailService assetDetailService;
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
@@ -45,11 +46,13 @@ public class BrowseController {
   public BrowseController(
       RepositoryDao repositoryDao,
       BrowseNodeDao browseNodeDao,
+      DockerBrowseService dockerBrowseService,
       BrowseAssetDetailService assetDetailService,
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService) {
     this.repositoryDao = repositoryDao;
     this.browseNodeDao = browseNodeDao;
+    this.dockerBrowseService = dockerBrowseService;
     this.assetDetailService = assetDetailService;
     this.authenticationService = authenticationService;
     this.securityService = securityService;
@@ -71,6 +74,9 @@ public class BrowseController {
     List<RepositoryRecord> sources = repo.type() == RepositoryType.GROUP
         ? repositoryDao.listMembers(repo.id())
         : List.of(repo);
+    if (repo.format() == RepositoryFormat.DOCKER && dockerBrowseService != null) {
+      return new BrowseListing(repo.name(), parent, dockerBrowseService.list(repo, sources, parent));
+    }
     BrowsePath browsePath = browsePath(repo.format(), parent);
     LinkedHashMap<String, BrowseEntry> merged = new LinkedHashMap<>();
     for (RepositoryRecord source : sources) {

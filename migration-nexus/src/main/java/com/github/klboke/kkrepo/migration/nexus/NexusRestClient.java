@@ -38,6 +38,12 @@ public class NexusRestClient {
   private static final String LOCAL_USER_SOURCE = "default";
   private static final String LOCAL_USERS_PATH = "/service/rest/v1/security/users?source=default";
   private static final String LOCAL_ROLES_PATH = "/service/rest/v1/security/roles?source=default";
+  private static final String DOCKER_MANIFEST_ACCEPT = String.join(", ",
+      "application/vnd.docker.distribution.manifest.v2+json",
+      "application/vnd.docker.distribution.manifest.list.v2+json",
+      "application/vnd.oci.image.manifest.v1+json",
+      "application/vnd.oci.image.index.v1+json",
+      "application/vnd.oci.artifact.manifest.v1+json");
   private static final String LOCAL_SECURITY_EXPORT_SCRIPT = """
       import groovy.json.JsonOutput
       import java.io.ByteArrayInputStream
@@ -362,9 +368,10 @@ public class NexusRestClient {
         + "/"
         + encodePath(path);
     IOException firstFailure = null;
+    String accept = repositoryAssetAccept(path);
     for (int index = 0; index < baseUris.size(); index++) {
       HttpRequest request = requestBuilder(baseUris.get(index), requestPath)
-          .header("Accept", "*/*")
+          .header("Accept", accept)
           .GET()
           .build();
       try {
@@ -393,6 +400,17 @@ public class NexusRestClient {
       }
     }
     throw new IOException("Nexus repository asset " + requestPath + " did not return a response");
+  }
+
+  static String repositoryAssetAccept(String path) {
+    if (path == null) {
+      return "*/*";
+    }
+    String normalized = path.trim();
+    if (normalized.contains("/manifests/") && (normalized.startsWith("v2/") || normalized.contains("/v2/"))) {
+      return DOCKER_MANIFEST_ACCEPT;
+    }
+    return "*/*";
   }
 
   private SecurityExportResult readSecurityExport() throws IOException, InterruptedException {

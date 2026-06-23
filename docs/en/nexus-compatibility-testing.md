@@ -20,7 +20,7 @@ compat-test/
 - hosted write, delete, and repeated-upload behavior
 - client-visible proxy, group, browse/search behavior
 
-The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
+The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
 
 Regular test command:
 
@@ -62,7 +62,7 @@ In addition to in-project black-box compatibility tests, after migrating Nexus t
 
 This validation stage aims to:
 
-- Confirm that real Maven, npm, PyPI, Go, Helm, and similar client requests are recognized correctly by kkrepo.
+- Confirm that real Maven, npm, PyPI, Go, Helm, Docker/OCI, and similar client requests are recognized correctly by kkrepo.
 - Compare HTTP status, error types, and key response behavior between the Nexus main path and the kkrepo mirrored path.
 - Observe proxy upstream access, blob storage, permission/authentication, and metadata/index rebuild stability under real traffic.
 - Discover edge requests not covered by `compat-test`, such as special client headers, old client behavior, CI plugin probe requests, and occasional proxy requests.
@@ -77,7 +77,7 @@ Istio traffic mirroring only copies requests to kkrepo. Clients still receive re
 - Proxy upstream errors and latency
 - Blob storage read/write errors
 
-Nexus UI admin requests, ExtDirect polling, Script API requests, and other management-plane traffic are not the same as Maven/npm/PyPI/Go/Helm repository protocol traffic. When analyzing mirror anomalies, classify the request type first so management-plane requests are not mistaken for repository protocol compatibility issues.
+Nexus UI admin requests, ExtDirect polling, Script API requests, and other management-plane traffic are not the same as Maven/npm/PyPI/Go/Helm/Docker/OCI repository protocol traffic. When analyzing mirror anomalies, classify the request type first so management-plane requests are not mistaken for repository protocol compatibility issues.
 
 ## Production-Scale Validation
 

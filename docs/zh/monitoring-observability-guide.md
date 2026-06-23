@@ -148,6 +148,27 @@ docs/resources/grafana/dashboard.json
 - `op`：操作，例如 `put`、`get`、`get_range`、`delete`
 - `outcome`：`success`、`miss`、`error`
 
+### Docker / OCI
+
+Docker / OCI 也会通过 `format="docker"` 暴露仓库请求和 blob 存储指标。额外的 Docker 专项指标包括：
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `kkrepo_docker_upload_sessions_total` | counter | Docker upload session 操作数，按 action 和 outcome 区分 |
+| `kkrepo_docker_blob_mount_total` | counter | 跨仓库 blob mount 尝试次数 |
+| `kkrepo_docker_cache_events_total` | counter | Docker manifest/blob/tag/group/negative-cache 事件 |
+| `kkrepo_docker_digest_verifications_total` | counter | upload/proxy/blob digest 校验结果 |
+| `kkrepo_docker_cleanup_items_total` | counter | Docker cleanup policy 删除或处理的 item 数 |
+| `kkrepo_docker_referrers_total` | counter | OCI referrers API 响应次数 |
+| `kkrepo_docker_referrer_descriptors_total` | counter | 返回的 OCI referrer descriptor 数 |
+| `kkrepo_docker_uploads_active` | gauge | 当前活跃 Docker 上传请求 |
+| `kkrepo_docker_downloads_active` | gauge | 当前活跃 Docker blob 下载请求 |
+| `kkrepo_docker_uploads_limit` | gauge | Docker 上传并发限制配置值 |
+| `kkrepo_docker_downloads_limit` | gauge | Docker blob 下载并发限制配置值 |
+
+Docker proxy 仓库的上游 registry 请求会通过 `kkrepo_proxy_remote_*` 记录，
+并带 `format="docker"`，其中包括 token 请求和 redirect hop。
+
 ### 后台任务和队列
 
 | 指标 | 类型 | 说明 |

@@ -4,11 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.sun.net.httpserver.HttpServer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
@@ -205,6 +207,37 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
+  void remoteBlobFetchFollowsRegistryRedirects() throws Exception {
+    try (TestRegistry registry = TestRegistry.start()) {
+      List<String> requestPaths = new ArrayList<>();
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        requestPaths.add(exchange.getRequestURI().getPath());
+        exchange.getResponseHeaders().add("Location", registry.baseUrl + "/cdn/layers/abc");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      registry.server.createContext("/cdn/layers/abc", exchange -> {
+        requestPaths.add(exchange.getRequestURI().getPath());
+        byte[] body = "layer".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = client();
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime(registry.baseUrl, null, null),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(List.of("/v2/library/nginx/blobs/sha256:abc", "/cdn/layers/abc"), requestPaths);
+    }
+  }
+
+  @Test
   void bearerTokenIsCachedAcrossRemoteChallenges() throws Exception {
     try (TestRegistry registry = TestRegistry.start()) {
       AtomicInteger tokenCalls = new AtomicInteger();
@@ -253,6 +286,43 @@ class DockerRemoteRegistryClientTest {
       assertEquals(1, tokenCalls.get());
       assertEquals(java.util.Arrays.asList(null, "Bearer cached-remote-token", null, "Bearer cached-remote-token"),
           manifestAuthorizations);
+    }
+  }
+
+  @Test
+  void remoteFetchRecordsDockerProxyRemoteMetrics() throws Exception {
+    try (TestRegistry registry = TestRegistry.start()) {
+      registry.server.createContext("/v2/library/alpine/manifests/latest", exchange -> {
+        byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+      DockerRemoteRegistryClient client = new DockerRemoteRegistryClient(
+          null,
+          OutboundRequestPolicy.allowPrivateForTests(),
+          null,
+          true,
+          300,
+          new KkRepoMetrics(meterRegistry));
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime(registry.baseUrl, null, null),
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(1.0, meterRegistry.counter(
+          "kkrepo_proxy_remote_requests_total",
+          "repo", "docker-proxy",
+          "format", "docker",
+          "method", "get",
+          "remote_host", "127.0.0.1",
+          "status", "200",
+          "outcome", "success").count());
     }
   }
 

@@ -14,6 +14,7 @@ PID_FILE="$LOG_DIR/server.pid"
 LOG_FILE="$LOG_DIR/server.log"
 PORT="${KKREPO_PORT:-18090}"
 START_TIMEOUT_SECONDS="${KKREPO_START_TIMEOUT_SECONDS:-90}"
+export KKREPO_CREDENTIAL_SECRET="${KKREPO_CREDENTIAL_SECRET:-nexus-plus-development-credential-secret}"
 
 mkdir -p "$LOG_DIR"
 

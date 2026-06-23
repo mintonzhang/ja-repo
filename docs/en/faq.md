@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -27,12 +27,11 @@ Current supported formats:
 - PyPI
 - Go
 - Helm
+- Docker / OCI
 - NuGet
 - RubyGems
 - Yum
 - Raw
-
-Docker / OCI Registry is in progress. See the [Docker / OCI development plan](dev/docker-repository-implementation-plan.md).
 
 ## Does kkrepo keep the same client URLs?
 
@@ -44,7 +43,7 @@ For supported non-Docker formats, the main client URL shape is compatible with N
 
 This helps preserve Maven, npm, pip, Helm, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration.
 
-Docker / OCI uses a different `/v2/...` registry protocol and is being designed separately.
+Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
 ## Why MySQL?
 
@@ -122,7 +121,7 @@ Always run preflight and review migration reports before cutover.
 
 Docker / OCI Registry hosted, proxy, and group repositories are implemented for Registry HTTP API V2 client workflows. Use Docker's `/v2/...` route: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>` when configured.
 
-Docker migration, runtime connector reload, V1 search, and full OCI conformance workflows are still being completed.
+Hosted Docker repository migration is supported through the Nexus Repository Data flow. Docker Registry V1 API and `docker search` are not part of the current supported surface; modern Docker/OCI workflows use Registry V2 and OCI Distribution.
 
 Do not assume Docker pull/push works through `/repository/<repo>/...`.
 

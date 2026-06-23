@@ -148,6 +148,29 @@ Common labels:
 - `op`: operation, such as `put`, `get`, `get_range`, `delete`
 - `outcome`: `success`, `miss`, `error`
 
+### Docker / OCI
+
+Docker / OCI also emits repository request and blob storage metrics with
+`format="docker"`. Additional Docker-specific metrics are:
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `kkrepo_docker_upload_sessions_total` | counter | Docker upload session operations, labeled by action and outcome |
+| `kkrepo_docker_blob_mount_total` | counter | Cross-repository blob mount attempts |
+| `kkrepo_docker_cache_events_total` | counter | Docker manifest/blob/tag/group/negative-cache events |
+| `kkrepo_docker_digest_verifications_total` | counter | Upload/proxy/blob digest verification results |
+| `kkrepo_docker_cleanup_items_total` | counter | Items deleted or handled by Docker cleanup policies |
+| `kkrepo_docker_referrers_total` | counter | OCI referrers API response count |
+| `kkrepo_docker_referrer_descriptors_total` | counter | OCI referrer descriptors returned |
+| `kkrepo_docker_uploads_active` | gauge | Active Docker upload requests |
+| `kkrepo_docker_downloads_active` | gauge | Active Docker blob download requests |
+| `kkrepo_docker_uploads_limit` | gauge | Configured Docker upload concurrency limit |
+| `kkrepo_docker_downloads_limit` | gauge | Configured Docker blob download concurrency limit |
+
+For Docker proxy repositories, upstream registry calls are recorded through
+`kkrepo_proxy_remote_*` with `format="docker"`, including token requests and
+redirect hops.
+
 ### Background Tasks And Queues
 
 | Metric | Type | Description |

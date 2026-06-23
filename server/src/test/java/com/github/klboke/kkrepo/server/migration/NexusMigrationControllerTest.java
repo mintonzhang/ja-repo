@@ -144,6 +144,39 @@ class NexusMigrationControllerTest {
   }
 
   @Test
+  void repositoryDataCommandMergesExplicitRepositoryNames() throws Exception {
+    NexusMigrationController.RepositoryDataMigrationCommand command =
+        new NexusMigrationController.RepositoryDataMigrationCommand(
+            "http://localhost:28090/",
+            "admin",
+            "secret",
+            null,
+            null,
+            "3.29.2-02",
+            List.of("docker-hosted"),
+            "docker-extra docker-second,docker-third",
+            List.of("docker-proxy"),
+            "docker-proxy-extra",
+            100,
+            1,
+            true,
+            null);
+
+    Method method = NexusMigrationController.class.getDeclaredMethod(
+        "repositoryNames",
+        List.class,
+        String.class);
+    method.setAccessible(true);
+
+    assertEquals(
+        List.of("docker-hosted", "docker-extra", "docker-second", "docker-third"),
+        method.invoke(null, command.repositories(), command.repositoryNames()));
+    assertEquals(
+        List.of("docker-proxy", "docker-proxy-extra"),
+        method.invoke(null, command.backupProxyRepositories(), command.backupProxyRepositoryNames()));
+  }
+
+  @Test
   void runRefreshesConfigCachesAfterMigrationWrites() throws Exception {
     CountingMigrationService migrationService = new CountingMigrationService();
     CountingRepositoryCatalogCache repositoryCatalogCache = new CountingRepositoryCatalogCache();
@@ -255,7 +288,20 @@ class NexusMigrationControllerTest {
         11L,
         "finished",
         request.dryRun(),
-        new NexusMigrationPreflight(0, 0, 0, 0, List.of(), List.of(), 0, List.of(), List.of()),
+        new NexusMigrationPreflight(
+            0,
+            0,
+            0,
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            null,
+            0,
+            List.of(),
+            List.of()),
         new ConfigMigrationCounts(0, 0, 0, 0, 0),
         null,
         List.of(),

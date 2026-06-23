@@ -19,7 +19,9 @@ package com.github.klboke.kkrepo.core.security;
  * of how the process is launched.
  */
 public final class EncryptionSecrets {
-  static final String DEV_CREDENTIAL_SECRET = "kkrepo-development-credential-secret";
+  // Keep the development credential secret stable so existing local/dev databases can decrypt
+  // stored blob-store and realm credentials across project renames.
+  static final String DEV_CREDENTIAL_SECRET = "nexus-plus-development-credential-secret";
   static final String DEV_API_KEY_PAYLOAD_SECRET = "kkrepo-development-api-key-payload-secret";
 
   private static volatile String credentialSecretOverride;

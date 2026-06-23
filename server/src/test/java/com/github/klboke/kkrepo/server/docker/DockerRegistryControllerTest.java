@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.AccessDecisionService;
+import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -398,13 +399,85 @@ class DockerRegistryControllerTest {
     verify(hosted, never()).startUpload(any(), anyString(), anyString(), anyString(), any(), anyString(), anyString());
   }
 
+  @Test
+  void pathBasedCrossRepositoryMountResolvesSourceRepositoryFromFromParameter() {
+    RepositoryRuntime target = hosted(1L, "docker-target", null);
+    RepositoryRuntime source = hosted(2L, "docker-source", null);
+    DockerHostedService hosted = mock(DockerHostedService.class);
+    AccessDecisionService access = mock(AccessDecisionService.class);
+    String digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    when(access.decide(any(), any(RepositoryPermission.class))).thenReturn(AccessDecision.allow());
+    when(hosted.startUpload(
+        eq(target),
+        eq("team/app"),
+        eq(digest),
+        eq("library/base"),
+        eq(source),
+        eq("alice"),
+        anyString()))
+        .thenReturn(new DockerUploadService.UploadStatus(null, 0, 0, true, DockerDigest.parse(digest)));
+    DockerRegistryController controller = controller(List.of(target, source), hosted, access);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("POST", "/v2/docker-target/team/app/blobs/uploads");
+    request.setScheme("https");
+    request.setServerName("repo.example.com");
+    request.setServerPort(443);
+    request.setRemoteAddr("127.0.0.1");
+    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, new AuthenticatedSubject(
+        "default",
+        "alice",
+        null,
+        null,
+        new PermissionSubject("default", "alice", java.util.Set.of(), null)));
+
+    ResponseEntity<?> response = controller.post(request, digest, "docker-source/library/base");
+
+    assertEquals(HttpStatus.CREATED, response.getStatusCode());
+    assertEquals(digest, response.getHeaders().getFirst(DockerConstants.CONTENT_DIGEST_HEADER));
+    assertEquals("https://repo.example.com/v2/docker-target/team/app/blobs/" + digest,
+        response.getHeaders().getFirst(HttpHeaders.LOCATION));
+    verify(access).decide(any(), eq(new RepositoryPermission(
+        source.name(), RepositoryFormat.DOCKER, "library/base", PermissionAction.READ)));
+    verify(hosted).startUpload(
+        eq(target),
+        eq("team/app"),
+        eq(digest),
+        eq("library/base"),
+        eq(source),
+        eq("alice"),
+        anyString());
+  }
+
+  @Test
+  void hostedDeleteBlobReturnsAccepted() {
+    RepositoryRuntime runtime = hosted("docker-hosted", null);
+    DockerHostedService hosted = mock(DockerHostedService.class);
+    DockerDigest digest = DockerDigest.parse("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    when(hosted.deleteBlob(runtime, digest)).thenReturn(DockerResponse.noBody(202));
+    DockerRegistryController controller = controller(runtime, hosted);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("DELETE", "/v2/docker-hosted/library/alpine/blobs/" + digest.value());
+
+    ResponseEntity<?> response = controller.delete(request);
+
+    assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+    verify(hosted).deleteBlob(runtime, digest);
+  }
+
   private static DockerRegistryController controller(RepositoryRuntime runtime, DockerHostedService hosted) {
     return controller(runtime, hosted, null);
   }
 
   private static DockerRegistryController controller(
       RepositoryRuntime runtime, DockerHostedService hosted, AccessDecisionService accessDecisionService) {
-    return controller(runtime, hosted, mock(DockerProxyService.class), mock(DockerGroupService.class),
+    return controller(runtime == null ? List.of() : List.of(runtime), hosted, mock(DockerProxyService.class),
+        mock(DockerGroupService.class),
+        accessDecisionService);
+  }
+
+  private static DockerRegistryController controller(
+      List<RepositoryRuntime> runtimes, DockerHostedService hosted, AccessDecisionService accessDecisionService) {
+    return controller(runtimes, hosted, mock(DockerProxyService.class), mock(DockerGroupService.class),
         accessDecisionService);
   }
 
@@ -414,8 +487,17 @@ class DockerRegistryControllerTest {
       DockerProxyService proxy,
       DockerGroupService group,
       AccessDecisionService accessDecisionService) {
+    return controller(runtime == null ? List.of() : List.of(runtime), hosted, proxy, group, accessDecisionService);
+  }
+
+  private static DockerRegistryController controller(
+      List<RepositoryRuntime> runtimes,
+      DockerHostedService hosted,
+      DockerProxyService proxy,
+      DockerGroupService group,
+      AccessDecisionService accessDecisionService) {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
-    if (runtime != null) {
+    for (RepositoryRuntime runtime : runtimes) {
       when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     }
     return new DockerRegistryController(
@@ -450,15 +532,23 @@ class DockerRegistryControllerTest {
   }
 
   private static RepositoryRuntime hosted(String name, String connectorPublicUrl) {
-    return hosted(name, connectorPublicUrl, "ALLOW");
+    return hosted(1L, name, connectorPublicUrl, "ALLOW");
+  }
+
+  private static RepositoryRuntime hosted(long id, String name, String connectorPublicUrl) {
+    return hosted(id, name, connectorPublicUrl, "ALLOW");
   }
 
   private static RepositoryRuntime hosted(String name, String connectorPublicUrl, String writePolicy) {
-    return repository(name, RepositoryType.HOSTED, "docker-hosted", writePolicy, connectorPublicUrl);
+    return hosted(1L, name, connectorPublicUrl, writePolicy);
+  }
+
+  private static RepositoryRuntime hosted(long id, String name, String connectorPublicUrl, String writePolicy) {
+    return repository(id, name, RepositoryType.HOSTED, "docker-hosted", writePolicy, connectorPublicUrl);
   }
 
   private static RepositoryRuntime repository(String name, RepositoryType type, String recipeName) {
-    return repository(name, type, recipeName, "ALLOW", null);
+    return repository(1L, name, type, recipeName, "ALLOW", null);
   }
 
   private static RepositoryRuntime repository(
@@ -467,8 +557,18 @@ class DockerRegistryControllerTest {
       String recipeName,
       String writePolicy,
       String connectorPublicUrl) {
+    return repository(1L, name, type, recipeName, writePolicy, connectorPublicUrl);
+  }
+
+  private static RepositoryRuntime repository(
+      long id,
+      String name,
+      RepositoryType type,
+      String recipeName,
+      String writePolicy,
+      String connectorPublicUrl) {
     return new RepositoryRuntime(
-        1L,
+        id,
         name,
         RepositoryFormat.DOCKER,
         type,

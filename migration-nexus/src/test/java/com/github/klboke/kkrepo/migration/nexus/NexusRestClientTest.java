@@ -140,6 +140,15 @@ class NexusRestClientTest {
     assertTrue(nexus.scriptDeleted);
   }
 
+  @Test
+  void dockerManifestAssetDownloadsRequestSchema2ManifestMediaTypes() {
+    String accept = NexusRestClient.repositoryAssetAccept("v2/team/app/manifests/latest");
+
+    assertTrue(accept.contains("application/vnd.docker.distribution.manifest.v2+json"));
+    assertTrue(accept.contains("application/vnd.oci.image.manifest.v1+json"));
+    assertEquals("*/*", NexusRestClient.repositoryAssetAccept("v2/team/app/blobs/sha256:abc"));
+  }
+
   private static NexusRestClient client(FakeNexus nexus) {
     return new NexusRestClient(
         "http://source.example/",
@@ -293,4 +302,5 @@ class NexusRestClientTest {
       return new HttpTextResponse(404, OBJECT_MAPPER.writeValueAsString(Map.of("message", "not found")));
     }
   }
+
 }

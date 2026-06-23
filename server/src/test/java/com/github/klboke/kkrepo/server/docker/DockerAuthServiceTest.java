@@ -80,4 +80,31 @@ class DockerAuthServiceTest {
         "imageName", "",
         "actions", List.of("catalog"))), scopes.getValue());
   }
+
+  @Test
+  void connectorPortScopeIsGrantedAgainstMappedRepository() {
+    DockerAuthTokenDao tokenDao = mock(DockerAuthTokenDao.class);
+    SecurityAuthenticationService authentication = mock(SecurityAuthenticationService.class);
+    AccessDecisionService access = mock(AccessDecisionService.class);
+    PermissionSubject permissionSubject = new PermissionSubject("Local", "alice", Set.of("docker-write"), null);
+    AuthenticatedSubject subject = new AuthenticatedSubject(
+        "Local", "alice", "local", null, permissionSubject);
+    MockHttpServletRequest request = new MockHttpServletRequest("GET", "/service/rest/v1/docker/token");
+    request.setAttribute(DockerConnectorConfiguration.CONNECTOR_REPOSITORY_ATTRIBUTE, "docker-hosted");
+    when(authentication.authenticate(request)).thenReturn(Optional.of(subject));
+    when(access.decide(eq(permissionSubject), any(RepositoryPermission.class))).thenReturn(AccessDecision.allow());
+    DockerAuthService service = new DockerAuthService(tokenDao, authentication, access, 900);
+
+    service.grant(request, "127.0.0.1:18180",
+        List.of("repository:codex/alpine:pull,push"));
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<Map<String, Object>>> scopes =
+        ArgumentCaptor.forClass((Class<List<Map<String, Object>>>) (Class<?>) List.class);
+    verify(tokenDao).insert(any(), eq("Local"), eq("alice"), eq("local"), eq(null), scopes.capture(), any(Instant.class));
+    assertEquals(List.of(Map.of(
+        "repository", "docker-hosted",
+        "imageName", "codex/alpine",
+        "actions", List.of("pull", "push"))), scopes.getValue());
+  }
 }

@@ -114,7 +114,7 @@ class DockerUploadServiceTest {
       return null;
     }).when(uploadDao).appendChunk(
         eq("upload-1"), eq(0), eq(0L), eq(2L), any(), any(), any(), eq(3L), eq(3L));
-    when(blobStore.putBlob(
+    when(blobStore.putVerifiedBlob(
         eq(runtime),
         eq(digest),
         any(InputStream.class),
@@ -180,7 +180,7 @@ class DockerUploadServiceTest {
     }).when(uploadDao).appendChunk(
         eq("upload-2"), anyInt(), anyLong(), anyLong(),
         any(), any(), any(), anyLong(), anyLong());
-    when(blobStore.putBlob(
+    when(blobStore.putVerifiedBlob(
         eq(runtime),
         eq(digest),
         any(InputStream.class),

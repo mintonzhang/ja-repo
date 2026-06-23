@@ -8,7 +8,7 @@ The goal is not to copy Nexus internals. kkrepo keeps client-visible protocol be
 
 ```text
 Artifact clients
-  Maven / npm / PyPI / Go / Helm / NuGet / RubyGems / Yum / Raw
+  Maven / npm / PyPI / Go / Helm / Docker/OCI / NuGet / RubyGems / Yum / Raw
         |
         v
 Load balancer / reverse proxy
@@ -37,6 +37,15 @@ Repository client requests use the Nexus-compatible path:
 ```text
 /repository/<repo>/<artifact-path>
 ```
+
+Docker / OCI clients use Registry HTTP API V2 routes instead:
+
+```text
+/v2/<repo>/<image>/...
+/v2/<image>/...
+```
+
+The second shape is used on repository-level Docker connector ports, where the local listening port maps to one Docker repository.
 
 The server flow is:
 
@@ -67,6 +76,7 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `protocol-pypi` | PyPI protocol helpers |
 | `protocol-go` | Go module proxy helpers |
 | `protocol-helm` | Helm chart and index helpers |
+| `protocol-docker` | Docker Registry V2 / OCI path, digest, manifest, media type, and error helpers |
 | `protocol-nuget` | NuGet path helpers |
 | `protocol-rubygems` | RubyGems metadata helpers |
 | `protocol-yum` | Yum/RPM metadata helpers |

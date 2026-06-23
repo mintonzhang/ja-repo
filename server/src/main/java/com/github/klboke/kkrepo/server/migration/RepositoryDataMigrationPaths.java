@@ -13,9 +13,16 @@ final class RepositoryDataMigrationPaths {
   }
 
   static boolean shouldDiscoverAsset(RepositoryFormat format, String path) {
-    return path != null
-        && !path.isBlank()
-        && !(format == RepositoryFormat.MAVEN2 && isMavenChecksumPath(path));
+    if (path == null || path.isBlank()) {
+      return false;
+    }
+    if (format == RepositoryFormat.MAVEN2) {
+      return !isMavenChecksumPath(path);
+    }
+    if (format == RepositoryFormat.DOCKER) {
+      return path.contains("/manifests/") || path.contains("/blobs/");
+    }
+    return true;
   }
 
   static boolean shouldGenerateMavenChecksumSiblings(MavenPath path) {

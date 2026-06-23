@@ -14,17 +14,16 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.SequenceInputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,17 +36,28 @@ public class DockerUploadService {
   private final DockerBlobStore blobStore;
   private final DockerManifestStore manifestStore;
   private final long uploadTtlSeconds;
+  private final DockerMetrics metrics;
 
   @Autowired
   public DockerUploadService(
       DockerUploadDao uploadDao,
       DockerBlobStore blobStore,
       DockerManifestStore manifestStore,
-      @Value("${kkrepo.docker.upload-session-ttl-seconds:86400}") long uploadTtlSeconds) {
+      @Value("${kkrepo.docker.upload-session-ttl-seconds:86400}") long uploadTtlSeconds,
+      @Autowired(required = false) DockerMetrics metrics) {
     this.uploadDao = uploadDao;
     this.blobStore = blobStore;
     this.manifestStore = manifestStore;
     this.uploadTtlSeconds = Math.max(300, uploadTtlSeconds);
+    this.metrics = metrics;
+  }
+
+  public DockerUploadService(
+      DockerUploadDao uploadDao,
+      DockerBlobStore blobStore,
+      DockerManifestStore manifestStore,
+      long uploadTtlSeconds) {
+    this(uploadDao, blobStore, manifestStore, uploadTtlSeconds, null);
   }
 
   public UploadStatus start(
@@ -62,8 +72,10 @@ public class DockerUploadService {
       DockerDigest digest = DockerDigest.parse(mountDigest);
       var mounted = mountExistingBlob(runtime, sourceRuntime, digest, imageName, fromImage, createdBy, createdByIp);
       if (mounted.isPresent()) {
+        recordMount(runtime, sourceRuntime, "mounted");
         return new UploadStatus(null, 0, 0, true, digest);
       }
+      recordMount(runtime, sourceRuntime, "fallback_upload");
     }
     String uuid = UUID.randomUUID().toString();
     uploadDao.insertSession(new DockerUploadSessionRecord(
@@ -83,6 +95,7 @@ public class DockerUploadService {
         Map.of("multiReplicaSemantics", "session and chunk offsets are MySQL truth; chunk bytes are blob-store objects"),
         null,
         null));
+    recordUpload(runtime, "start", "created");
     return new UploadStatus(uuid, 0, 0, false, null);
   }
 
@@ -139,6 +152,7 @@ public class DockerUploadService {
     uploadDao.appendChunk(uuid, chunkIndex, start, Math.max(start, end), chunk.blobRef(),
         chunk.objectKey(), chunk.sha256(), chunk.size(),
         start + chunk.size());
+    recordUpload(runtime, "append", "stored");
     return new UploadStatus(uuid, 0, start + chunk.size(), false, null);
   }
 
@@ -162,28 +176,29 @@ public class DockerUploadService {
       session = lockedSession(uuid, runtime);
     }
     List<DockerUploadChunkRecord> chunks = uploadDao.listChunks(uuid);
-    Path merged = mergeChunks(runtime, chunks);
-    try {
-      DigestedFile digested = digestFile(merged);
-      if (!expectedDigest.isSha256() || !expectedDigest.hex().equals(digested.sha256())) {
-        throw new DockerProtocolException(DockerErrorCode.DIGEST_INVALID, "uploaded blob digest mismatch", 400);
+    long totalSize = totalChunkSize(chunks);
+    try (InputStream in = chunkStream(runtime, chunks)) {
+      var stored = blobStore.putVerifiedBlob(
+          runtime,
+          expectedDigest,
+          in,
+          totalSize,
+          "application/octet-stream",
+          createdBy,
+          createdByIp);
+      uploadDao.completeSession(uuid, expectedDigest.value(), expectedDigest.algorithm());
+      recordUpload(runtime, "complete", "stored");
+      recordDigest(runtime, "upload_blob", "success");
+      return new CompleteResult(expectedDigest, stored.blob().size());
+    } catch (DockerProtocolException e) {
+      recordUpload(runtime, "complete", "error");
+      if (e.code() == DockerErrorCode.DIGEST_INVALID) {
+        recordDigest(runtime, "upload_blob", "failure");
       }
-      try (InputStream in = Files.newInputStream(merged)) {
-        var stored = blobStore.putBlob(
-            runtime,
-            expectedDigest,
-            in,
-            digested.size(),
-            "application/octet-stream",
-            createdBy,
-            createdByIp);
-        uploadDao.completeSession(uuid, expectedDigest.value(), expectedDigest.algorithm());
-        return new CompleteResult(expectedDigest, stored.blob().size());
-      }
+      throw e;
     } catch (IOException e) {
+      recordUpload(runtime, "complete", "error");
       throw new UncheckedIOException(e);
-    } finally {
-      TempBlobFiles.deleteQuietly(merged);
     }
   }
 
@@ -191,6 +206,7 @@ public class DockerUploadService {
   public void cancel(RepositoryRuntime runtime, String uuid) {
     lockedSession(uuid, runtime);
     uploadDao.cancelSession(uuid);
+    recordUpload(runtime, "cancel", "cancelled");
   }
 
   private DockerUploadSessionRecord lockedSession(String uuid, RepositoryRuntime runtime) {
@@ -239,43 +255,9 @@ public class DockerUploadService {
     }
   }
 
-  private Path mergeChunks(RepositoryRuntime runtime, List<DockerUploadChunkRecord> chunks) {
+  private InputStream chunkStream(RepositoryRuntime runtime, List<DockerUploadChunkRecord> chunks) {
     BlobStorage storage = blobStore.storage(runtime);
-    Path merged = null;
-    try {
-      merged = TempBlobFiles.createTempFile(storage, "docker-upload-merged-", ".blob");
-      try (var out = Files.newOutputStream(merged)) {
-      for (DockerUploadChunkRecord chunk : chunks) {
-        BlobReference reference = BlobReferenceCodec.reference(
-            chunk.blobRef(), chunk.objectKey(), chunk.sha256(), chunk.size());
-        try (InputStream in = storage.get(reference)
-            .orElseThrow(() -> new DockerProtocolException(DockerErrorCode.BLOB_UPLOAD_INVALID,
-                "missing upload chunk " + chunk.id(), 400))) {
-          in.transferTo(out);
-        }
-      }
-      }
-      return merged;
-    } catch (IOException e) {
-      TempBlobFiles.deleteQuietly(merged);
-      throw new UncheckedIOException(e);
-    }
-  }
-
-  private static DigestedFile digestFile(Path path) throws IOException {
-    try (InputStream in = Files.newInputStream(path)) {
-      MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-      byte[] buffer = new byte[TempBlobFiles.responseBufferSize()];
-      long size = 0;
-      int read;
-      while ((read = in.read(buffer)) >= 0) {
-        sha256.update(buffer, 0, read);
-        size += read;
-      }
-      return new DigestedFile(HexFormat.of().formatHex(sha256.digest()), size);
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException(e);
-    }
+    return new ChunkSequenceInputStream(storage, chunks);
   }
 
   private static long copyDigesting(InputStream in, java.io.OutputStream out, MessageDigest digest) throws IOException {
@@ -328,6 +310,32 @@ public class DockerUploadService {
     return "docker/uploads/" + uuid + "/" + chunkIndex;
   }
 
+  private static long totalChunkSize(List<DockerUploadChunkRecord> chunks) {
+    long total = 0;
+    for (DockerUploadChunkRecord chunk : chunks) {
+      total += Math.max(0, chunk.size());
+    }
+    return total;
+  }
+
+  private void recordUpload(RepositoryRuntime runtime, String action, String outcome) {
+    if (metrics != null) {
+      metrics.uploadSession(runtime, action, outcome);
+    }
+  }
+
+  private void recordMount(RepositoryRuntime target, RepositoryRuntime source, String outcome) {
+    if (metrics != null) {
+      metrics.mount(target, source, outcome);
+    }
+  }
+
+  private void recordDigest(RepositoryRuntime runtime, String target, String outcome) {
+    if (metrics != null) {
+      metrics.digestVerification(runtime, target, outcome);
+    }
+  }
+
   public record UploadStatus(
       String uuid,
       long rangeStart,
@@ -345,9 +353,73 @@ public class DockerUploadService {
   private record ChunkUpload(String blobRef, String objectKey, String sha256, long size) {
   }
 
-  private record DigestedFile(String sha256, long size) {
+  private record ContentRange(long start, Long end) {
   }
 
-  private record ContentRange(long start, Long end) {
+  private static final class ChunkSequenceInputStream extends InputStream {
+    private final BlobStorage storage;
+    private final List<DockerUploadChunkRecord> chunks;
+    private int index;
+    private InputStream current;
+
+    private ChunkSequenceInputStream(BlobStorage storage, List<DockerUploadChunkRecord> chunks) {
+      this.storage = Objects.requireNonNull(storage, "storage");
+      this.chunks = chunks == null ? List.of() : chunks;
+    }
+
+    @Override
+    public int read() throws IOException {
+      while (currentStream()) {
+        int value = current.read();
+        if (value >= 0) {
+          return value;
+        }
+        closeCurrent();
+      }
+      return -1;
+    }
+
+    @Override
+    public int read(byte[] b, int off, int len) throws IOException {
+      while (currentStream()) {
+        int read = current.read(b, off, len);
+        if (read >= 0) {
+          return read;
+        }
+        closeCurrent();
+      }
+      return -1;
+    }
+
+    @Override
+    public void close() throws IOException {
+      closeCurrent();
+    }
+
+    private boolean currentStream() {
+      if (current != null) {
+        return true;
+      }
+      if (index >= chunks.size()) {
+        return false;
+      }
+      DockerUploadChunkRecord chunk = chunks.get(index++);
+      BlobReference reference = BlobReferenceCodec.reference(
+          chunk.blobRef(), chunk.objectKey(), chunk.sha256(), chunk.size());
+      current = storage.get(reference)
+          .orElseThrow(() -> new DockerProtocolException(DockerErrorCode.BLOB_UPLOAD_INVALID,
+              "missing upload chunk " + chunk.id(), 400));
+      return true;
+    }
+
+    private void closeCurrent() throws IOException {
+      if (current != null) {
+        try {
+          current.close();
+        } finally {
+          current = null;
+        }
+      }
+    }
   }
 }

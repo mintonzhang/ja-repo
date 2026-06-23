@@ -1351,6 +1351,93 @@ h1 {
   font-size: 13px;
 }
 
+.platform-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  border-top: 1px solid #eeeeee;
+  padding-top: 8px;
+}
+
+.platform-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(120px, 1.2fr) minmax(70px, auto);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 3px 0;
+}
+
+.platform-name,
+.platform-digest,
+.platform-size {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-name {
+  font-weight: 600;
+}
+
+.platform-digest {
+  color: var(--muted);
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.platform-size {
+  justify-self: end;
+  color: var(--muted);
+}
+
+.docker-descriptor-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  border-top: 1px solid #eeeeee;
+  padding-top: 8px;
+}
+
+.docker-descriptor-title {
+  color: #333333;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.docker-descriptor-row {
+  display: grid;
+  grid-template-columns: minmax(128px, 1.1fr) minmax(120px, 1.3fr) minmax(56px, auto) minmax(70px, 0.8fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 3px 0;
+}
+
+.docker-descriptor-row span,
+.docker-descriptor-row code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.descriptor-digest {
+  color: #4c5b66;
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.descriptor-media {
+  color: var(--muted);
+}
+
+.descriptor-size,
+.descriptor-platform {
+  color: #333333;
+}
+
 .attr-panel {
   display: grid;
   gap: 10px;

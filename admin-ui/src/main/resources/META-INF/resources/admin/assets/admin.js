@@ -19,6 +19,7 @@ const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
 let currentSession = null;
 let blobStoreHealth = {};
+let dockerOperations = null;
 let blobStoreFormMode = "create";
 let editingBlobStoreId = null;
 let repositoryFormMode = "create";
@@ -66,6 +67,7 @@ function csrfToken() {
 const viewHashRoutes = {
   repositories: "#admin/repository/repositories",
   blobstores: "#admin/repository/blobstores",
+  "docker-registry": "#admin/repository/docker",
   "security-users": "#admin/security/users",
   "security-roles": "#admin/security/roles",
   "security-privileges": "#admin/security/privileges",
@@ -85,6 +87,8 @@ const hashViewRoutes = {
   "#admin/repository/repositories": "repositories",
   "#admin/repository/blobstores": "blobstores",
   "#admin/repository/blob-stores": "blobstores",
+  "#admin/repository/docker": "docker-registry",
+  "#admin/repository/docker-registry": "docker-registry",
   "#admin/security": "security-users",
   "#admin/security/users": "security-users",
   "#admin/security/roles": "security-roles",
@@ -341,6 +345,15 @@ function lowerOrEmpty(value) {
   return String(value ?? "").toLowerCase();
 }
 
+function formatInstant(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return String(value);
+  }
+}
+
 function isLocalSource(source) {
   return lowerOrEmpty(source) === "local";
 }
@@ -512,6 +525,116 @@ function repositoryDisplayUrl(repo) {
     return repo.proxy.remoteUrl;
   }
   return repo.url || "";
+}
+
+async function loadDockerOperations() {
+  const summary = document.getElementById("docker-connector-summary");
+  const table = document.getElementById("docker-connector-table");
+  const transfer = document.getElementById("docker-transfer-summary");
+  if (!summary || !table || !transfer) return;
+  summary.innerHTML = card("Status", "Loading");
+  table.innerHTML = '<tr><td colspan="6" class="placeholder">Loading Docker connector runtime...</td></tr>';
+  transfer.innerHTML = "";
+  try {
+    const response = await fetch("/internal/docker/connectors", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    dockerOperations = await response.json();
+    renderDockerOperations(dockerOperations);
+  } catch (error) {
+    renderDockerOperationsError(error.message);
+  }
+}
+
+function renderDockerOperations(payload) {
+  const connector = payload?.connector || {};
+  const transfer = payload?.transfer || {};
+  const connectors = Array.isArray(connector.connectors) ? connector.connectors : [];
+  const active = connectors.filter((item) => item.active).length;
+  const errors = connector.lastError ? 1 : 0;
+  document.getElementById("docker-connector-summary").innerHTML = [
+    card("Enabled", connector.enabled ? "Yes" : "No"),
+    card("Active ports", `${active} / ${connectors.length}`),
+    card("Sequence", connector.sequence ?? "-"),
+    card("Last refreshed", formatInstant(connector.refreshedAt) || "-"),
+    card("Runtime errors", errors ? "Yes" : "No"),
+  ].join("");
+  document.getElementById("docker-transfer-summary").innerHTML = [
+    card("Active uploads", transfer.activeUploads ?? 0),
+    card("Max uploads", transfer.maxConcurrentUploads ? transfer.maxConcurrentUploads : "Unlimited"),
+    card("Active downloads", transfer.activeDownloads ?? 0),
+    card("Max downloads", transfer.maxConcurrentDownloads ? transfer.maxConcurrentDownloads : "Unlimited"),
+  ].join("");
+  document.getElementById("docker-connector-table").innerHTML = connectors.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.repositoryName || "")}</td>
+      <td>${escapeHtml(lowerOrEmpty(item.repositoryType))}</td>
+      <td><code>${escapeHtml(item.port ?? "")}</code></td>
+      <td>${item.publicUrl ? `<code>${escapeHtml(item.publicUrl)}</code>` : '<span class="health-muted">-</span>'}</td>
+      <td><span class="state-badge compact ${item.active ? "ok" : "warn"}">${escapeHtml(item.state || "")}</span></td>
+      <td>${item.active ? "Yes" : "No"}</td>
+    </tr>
+  `).join("") || '<tr><td colspan="6" class="placeholder">No Docker connector ports configured.</td></tr>';
+  const status = document.getElementById("docker-operations-status");
+  status.textContent = connector.lastError ? `Last runtime error: ${connector.lastError}` : "";
+  status.classList.toggle("error", Boolean(connector.lastError));
+}
+
+function renderDockerOperationsError(message) {
+  document.getElementById("docker-connector-summary").innerHTML = card("Status", "Failed");
+  document.getElementById("docker-connector-table").innerHTML =
+      `<tr><td colspan="6" class="placeholder">${escapeHtml(message || "Docker operations request failed.")}</td></tr>`;
+  document.getElementById("docker-transfer-summary").innerHTML = "";
+  const status = document.getElementById("docker-operations-status");
+  status.textContent = message || "";
+  status.classList.add("error");
+}
+
+function card(label, value) {
+  return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+async function refreshDockerConnectors() {
+  const button = document.getElementById("docker-connectors-refresh-button");
+  button.disabled = true;
+  try {
+    const response = await fetch("/internal/docker/connectors/refresh", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    dockerOperations = await response.json();
+    renderDockerOperations(dockerOperations);
+    showToast("Docker connectors refreshed.", "ok");
+  } catch (error) {
+    renderDockerOperationsError(error.message);
+    showToast(error.message || "Docker connector refresh failed.", "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function clearDockerCache() {
+  const button = document.getElementById("docker-cache-clear-button");
+  button.disabled = true;
+  try {
+    const response = await fetch("/internal/docker/cache/clear", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const payload = await response.json();
+    showToast(`Docker cache cleared for ${payload.repositories ?? 0} repositories.`, "ok");
+    await loadDockerOperations();
+  } catch (error) {
+    showToast(error.message || "Docker cache clear failed.", "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderBlobStores() {
@@ -2570,16 +2693,54 @@ function migrationPayload() {
   };
 }
 
+function renderCompactTable(headers, rows, emptyText = "") {
+  if (!rows.length) {
+    return emptyText ? `<pre class="code-panel">${escapeHtml(emptyText)}</pre>` : "";
+  }
+  return `
+    <table class="nx-table compact migration-detail-table">
+      <thead><tr>${headers.map((header) => `<th>${escapeHtml(header.label)}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr>
+            ${headers.map((header) => `<td>${escapeHtml(header.value(row))}</td>`).join("")}
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderMigrationSection(title, html) {
+  if (!html) return "";
+  return `
+    <div class="migration-list-title">${escapeHtml(title)}</div>
+    ${html}
+  `;
+}
+
+function renderMigrationList(title, values) {
+  const items = values || [];
+  if (!items.length) return "";
+  return renderMigrationSection(title, `<pre class="code-panel">${escapeHtml(items.join("\\n"))}</pre>`);
+}
+
 function renderMigrationResult(payload, title) {
   const result = document.getElementById("migration-result");
   const preflight = payload.preflight || payload;
   const config = payload.config || {};
   const apiSecurity = payload.apiSecurity || null;
+  const security = preflight.security || {};
+  const blobStorePlans = preflight.blobStorePlans || [];
+  const repositoriesToMigrate = preflight.repositoriesToMigrate || [];
+  const groupRepositories = preflight.groupRepositories || [];
   const unsupported = preflight.unsupported || [];
   const proxyRisks = preflight.proxyRemoteRisks || [];
   const passwordUsers = payload.passwordResetRequiredUsers || preflight.passwordResetRequiredUsers || [];
   const warnings = preflight.warnings || payload.warnings || [];
-  const validationChecks = payload.validation?.checks || [];
+  const validation = payload.validation || {};
+  const validationChecks = validation.checks || [];
+  const manualActions = validation.manualActions || [];
   result.hidden = false;
   result.innerHTML = `
     <div class="form-title">${escapeHtml(title)}</div>
@@ -2588,36 +2749,98 @@ function renderMigrationResult(payload, title) {
       <div><span>Blob stores</span><strong>${escapeHtml(config.blobStores ?? preflight.blobStores ?? 0)}</strong></div>
       <div><span>Repositories</span><strong>${escapeHtml(config.repositories ?? preflight.supportedRepositories ?? 0)}</strong></div>
       <div><span>Unsupported</span><strong>${escapeHtml(config.unsupportedRepositories ?? preflight.unsupportedRepositories ?? 0)}</strong></div>
-      <div><span>Users</span><strong>${escapeHtml(apiSecurity?.users ?? preflight.users ?? 0)}</strong></div>
-      ${apiSecurity ? `<div><span>API keys</span><strong>${escapeHtml(apiSecurity.apiKeys ?? 0)}</strong></div>` : ""}
+      <div><span>Groups</span><strong>${escapeHtml(config.groupRepositories ?? groupRepositories.length ?? 0)}</strong></div>
+      <div><span>Users</span><strong>${escapeHtml(apiSecurity?.users ?? security.users ?? preflight.users ?? 0)}</strong></div>
+      <div><span>Roles</span><strong>${escapeHtml(apiSecurity?.roles ?? security.roles ?? 0)}</strong></div>
+      <div><span>Privileges</span><strong>${escapeHtml(apiSecurity?.privileges ?? security.privileges ?? 0)}</strong></div>
+      <div><span>API keys</span><strong>${escapeHtml(apiSecurity?.apiKeys ?? security.apiKeys ?? 0)}</strong></div>
       <div><span>Password resets</span><strong>${escapeHtml(passwordUsers.length)}</strong></div>
     </div>
-    ${warnings.length ? `
-      <div class="migration-list-title">Warnings</div>
-      <pre class="code-panel">${escapeHtml(warnings.join("\\n"))}</pre>
-    ` : ""}
-    ${unsupported.length ? `
-      <div class="migration-list-title">Unsupported repositories</div>
-      <table class="nx-table compact"><thead><tr><th>Name</th><th>Format</th><th>Type</th><th>Reason</th></tr></thead><tbody>
-        ${unsupported.map((repo) => `<tr><td>${escapeHtml(repo.name)}</td><td>${escapeHtml(repo.format)}</td><td>${escapeHtml(repo.type)}</td><td>${escapeHtml(repo.reason)}</td></tr>`).join("")}
-      </tbody></table>
-    ` : ""}
-    ${proxyRisks.length ? `
-      <div class="migration-list-title">Proxy remotes</div>
-      <table class="nx-table compact"><thead><tr><th>Repository</th><th>Format</th><th>Remote URL</th><th>Status</th></tr></thead><tbody>
-        ${proxyRisks.map((risk) => `<tr><td>${escapeHtml(risk.repository)}</td><td>${escapeHtml(risk.format)}</td><td>${escapeHtml(risk.remoteUrl || "")}</td><td>${escapeHtml(risk.status)}</td></tr>`).join("")}
-      </tbody></table>
-    ` : ""}
-    ${passwordUsers.length ? `
-      <div class="migration-list-title">Password reset required</div>
-      <pre class="code-panel">${escapeHtml(passwordUsers.join("\\n"))}</pre>
-    ` : ""}
-    ${validationChecks.length ? `
-      <div class="migration-list-title">Validation result</div>
-      <table class="nx-table compact"><thead><tr><th>Scope</th><th>Check</th><th>Status</th><th>Message</th><th>Details</th></tr></thead><tbody>
-        ${validationChecks.map((check) => `<tr><td>${escapeHtml(check.scope)}</td><td>${escapeHtml(check.name)}</td><td>${escapeHtml(check.status)}</td><td>${escapeHtml(check.message)}</td><td>${escapeHtml((check.details || []).join(", ") || "-")}</td></tr>`).join("")}
-      </tbody></table>
-    ` : ""}
+    ${renderMigrationList("Warnings", warnings)}
+    ${renderMigrationSection("Blob stores", renderCompactTable([
+      { label: "Source", value: (store) => store.sourceName || "" },
+      { label: "Source type", value: (store) => store.sourceType || "" },
+      { label: "Target", value: (store) => store.targetName || "" },
+      { label: "Target type", value: (store) => store.targetType || "" },
+      { label: "Bucket", value: (store) => store.targetBucket || "" },
+      { label: "Prefix", value: (store) => store.targetPrefix || "" }
+    ], blobStorePlans, "No source blob stores were reported; the default target blob store will be used."))}
+    ${renderMigrationSection("Repositories to migrate", renderCompactTable([
+      { label: "Name", value: (repo) => repo.name || "" },
+      { label: "Format", value: (repo) => repo.format || "" },
+      { label: "Type", value: (repo) => repo.type || "" },
+      { label: "Recipe", value: (repo) => repo.recipe || "" },
+      { label: "Blob store", value: (repo) => repo.blobStoreName || "" },
+      { label: "Online", value: (repo) => repo.online === false ? "false" : "true" },
+      { label: "Remote URL", value: (repo) => repo.remoteUrl || "" }
+    ], repositoriesToMigrate, "No supported repositories were found in the source inventory."))}
+    ${renderMigrationSection("Group members", renderCompactTable([
+      { label: "Repository", value: (repo) => repo.repository || "" },
+      { label: "Format", value: (repo) => repo.format || "" },
+      { label: "Members", value: (repo) => (repo.members || []).join(", ") || "-" }
+    ], groupRepositories))}
+    ${renderMigrationSection("Unsupported repositories", renderCompactTable([
+      { label: "Name", value: (repo) => repo.name || "" },
+      { label: "Format", value: (repo) => repo.format || "" },
+      { label: "Type", value: (repo) => repo.type || "" },
+      { label: "Reason", value: (repo) => repo.reason || "" }
+    ], unsupported))}
+    ${renderMigrationSection("Proxy remotes", renderCompactTable([
+      { label: "Repository", value: (risk) => risk.repository || "" },
+      { label: "Format", value: (risk) => risk.format || "" },
+      { label: "Remote URL", value: (risk) => risk.remoteUrl || "" },
+      { label: "Status", value: (risk) => risk.status || "" }
+    ], proxyRisks))}
+    ${renderMigrationSection("Security users", renderCompactTable([
+      { label: "Source", value: (user) => user.source || "" },
+      { label: "User ID", value: (user) => user.userId || "" },
+      { label: "Status", value: (user) => user.status || "" },
+      { label: "Email", value: (user) => user.email || "" },
+      { label: "Password hash", value: (user) => user.passwordHashPresent ? "present" : "missing" }
+    ], security.userDetails || []))}
+    ${renderMigrationSection("Security roles", renderCompactTable([
+      { label: "Role ID", value: (role) => role.id || "" },
+      { label: "Source", value: (role) => role.source || "" },
+      { label: "Name", value: (role) => role.name || "" },
+      { label: "Read only", value: (role) => role.readOnly ? "true" : "false" },
+      { label: "Privileges", value: (role) => (role.privileges || []).join(", ") || "-" },
+      { label: "Child roles", value: (role) => (role.childRoles || []).join(", ") || "-" }
+    ], security.roleDetails || []))}
+    ${renderMigrationSection("User role mappings", renderCompactTable([
+      { label: "Source", value: (mapping) => mapping.source || "" },
+      { label: "User ID", value: (mapping) => mapping.userId || "" },
+      { label: "Roles", value: (mapping) => (mapping.roles || []).join(", ") || "-" }
+    ], security.userRoleMappingDetails || []))}
+    ${renderMigrationSection("API keys", renderCompactTable([
+      { label: "Domain", value: (apiKey) => apiKey.domain || "" },
+      { label: "Owner source", value: (apiKey) => apiKey.ownerSource || "" },
+      { label: "Owner user", value: (apiKey) => apiKey.ownerUserId || "" },
+      { label: "Display name", value: (apiKey) => apiKey.displayName || "" },
+      { label: "Status", value: (apiKey) => apiKey.status || "" },
+      { label: "Raw key", value: (apiKey) => apiKey.rawKeyPresent ? "present" : "missing" }
+    ], security.apiKeyDetails || []))}
+    ${renderMigrationSection("Content selectors", renderCompactTable([
+      { label: "Name", value: (selector) => selector.name || "" },
+      { label: "Type", value: (selector) => selector.type || "" },
+      { label: "Format", value: (selector) => selector.format || "" },
+      { label: "Expression", value: (selector) => selector.expression || "" }
+    ], security.contentSelectorDetails || []))}
+    ${renderMigrationList("Realm order", security.realmOrder || [])}
+    ${security.anonymous ? renderMigrationSection("Anonymous access", renderCompactTable([
+      { label: "Enabled", value: (anonymous) => anonymous.enabled ? "true" : "false" },
+      { label: "User source", value: (anonymous) => anonymous.userSource || "" },
+      { label: "User ID", value: (anonymous) => anonymous.userId || "" },
+      { label: "Realm", value: (anonymous) => anonymous.realmName || "" }
+    ], [security.anonymous])) : ""}
+    ${renderMigrationList("Password reset required", passwordUsers)}
+    ${renderMigrationList("Manual actions", manualActions)}
+    ${renderMigrationSection("Validation result", renderCompactTable([
+      { label: "Scope", value: (check) => check.scope || "" },
+      { label: "Check", value: (check) => check.name || "" },
+      { label: "Status", value: (check) => check.status || "" },
+      { label: "Message", value: (check) => check.message || "" },
+      { label: "Details", value: (check) => (check.details || []).join(", ") || "-" }
+    ], validationChecks))}
   `;
 }
 
@@ -3003,6 +3226,7 @@ function switchView(view, options = {}) {
   if (view === "repositories") {
     loadRepositories();
   }
+  if (view === "docker-registry") loadDockerOperations();
   if (view === "security-users") loadSecurityUsers();
   if (view === "security-roles") loadSecurityRoles();
   if (view === "security-privileges") loadSecurityPrivileges();
@@ -3093,6 +3317,8 @@ document.getElementById("repository-table").addEventListener("click", (event) =>
     deleteRepository(deleteButton.dataset.name);
   }
 });
+document.getElementById("docker-connectors-refresh-button").addEventListener("click", refreshDockerConnectors);
+document.getElementById("docker-cache-clear-button").addEventListener("click", clearDockerCache);
 
 document.getElementById("security-user-filter").addEventListener("input", renderSecurityUsers);
 document.getElementById("security-user-source-filter").addEventListener("change", renderSecurityUsers);

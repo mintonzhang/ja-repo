@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
@@ -34,6 +35,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,6 +47,28 @@ public class DockerManifestStore {
   private final DockerManifestParser manifestParser;
   private final AssetMetadataCache assetMetadataCache;
   private final TransientTransactionRetry transactionRetry;
+  private final GroupMemberAssetCache groupMemberAssetCache;
+  private final DockerMetrics metrics;
+
+  @Autowired
+  public DockerManifestStore(
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      DockerBlobStore blobStore,
+      DockerManifestParser manifestParser,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      GroupMemberAssetCache groupMemberAssetCache,
+      DockerMetrics metrics) {
+    this.assetDao = assetDao;
+    this.dockerDao = dockerDao;
+    this.blobStore = blobStore;
+    this.manifestParser = manifestParser;
+    this.assetMetadataCache = assetMetadataCache;
+    this.transactionRetry = transactionRetry;
+    this.groupMemberAssetCache = groupMemberAssetCache;
+    this.metrics = metrics;
+  }
 
   public DockerManifestStore(
       AssetDao assetDao,
@@ -53,12 +77,7 @@ public class DockerManifestStore {
       DockerManifestParser manifestParser,
       AssetMetadataCache assetMetadataCache,
       TransientTransactionRetry transactionRetry) {
-    this.assetDao = assetDao;
-    this.dockerDao = dockerDao;
-    this.blobStore = blobStore;
-    this.manifestParser = manifestParser;
-    this.assetMetadataCache = assetMetadataCache;
-    this.transactionRetry = transactionRetry;
+    this(assetDao, dockerDao, blobStore, manifestParser, assetMetadataCache, transactionRetry, null, null);
   }
 
   public StoredManifest putManifest(
@@ -193,6 +212,9 @@ public class DockerManifestStore {
 
   public DockerTagList listTags(RepositoryRuntime runtime, String imageName, String last, int limit) {
     int pageSize = Math.max(1, Math.min(limit, 1000));
+    if (!dockerDao.imageExists(runtime.id(), imageName)) {
+      throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, imageName);
+    }
     List<String> tags = dockerDao.listTags(runtime.id(), imageName, last, pageSize + 1);
     boolean hasNext = tags.size() > pageSize;
     if (hasNext) {
@@ -211,6 +233,7 @@ public class DockerManifestStore {
     return new DockerCatalogList(repositories, hasNext);
   }
 
+  @Transactional
   public int deleteReference(RepositoryRuntime runtime, String imageName, String reference) {
     if (DockerPathParser.isDigestReference(reference)) {
       DockerRegistryDao.DeletedManifest deleted = dockerDao.deleteManifest(runtime.id(), imageName, reference);
@@ -222,11 +245,16 @@ public class DockerManifestStore {
           assetDao.markBlobDeletedIfUnreferenced(
               deleted.assetBlobId(), "docker manifest deleted");
         }
+        invalidateGroupMemberCaches(runtime);
       }
       return deleted.deleted();
     }
     DockerPathParser.validateTag(reference);
-    return dockerDao.deleteTag(runtime.id(), imageName, reference);
+    int deleted = dockerDao.deleteTag(runtime.id(), imageName, reference);
+    if (deleted > 0) {
+      invalidateGroupMemberCaches(runtime);
+    }
+    return deleted;
   }
 
   public List<DockerManifestRecord> referrers(
@@ -307,6 +335,7 @@ public class DockerManifestStore {
       }
     }
     assetMetadataCache.evictAfterCommit(runtime.id(), asset.path());
+    invalidateGroupMemberCaches(runtime);
     return new StoredManifest(manifest, asset, blob);
   }
 
@@ -442,6 +471,19 @@ public class DockerManifestStore {
       }
     }
     return List.copyOf(normalized);
+  }
+
+  private void invalidateGroupMemberCaches(RepositoryRuntime runtime) {
+    if (groupMemberAssetCache != null && runtime != null) {
+      groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id());
+      recordCache(runtime, "group_member", "invalidate_member");
+    }
+  }
+
+  private void recordCache(RepositoryRuntime runtime, String cache, String result) {
+    if (metrics != null) {
+      metrics.cache(cache, runtime, result);
+    }
   }
 
   private DockerManifestReferenceRecord toReference(

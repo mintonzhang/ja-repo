@@ -30,6 +30,23 @@ class RepositoryDataMigrationPathsTest {
   }
 
   @Test
+  void dockerDiscoveryOnlyKeepsMigratableManifestAndBlobAssets() {
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.DOCKER, "v2/team/app/manifests/latest"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.DOCKER, "v2/team/app/blobs/sha256:"
+            + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.DOCKER, "v2/blobs/sha256:"
+            + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.DOCKER, "v2/team/app/tags/list"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.DOCKER, "v2/team/app/search?q=app"));
+  }
+
+  @Test
   void checksumGenerationRunsForMavenNonChecksumContent() {
     assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
         MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar")));

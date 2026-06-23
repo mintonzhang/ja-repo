@@ -25,8 +25,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
-@Order(SessionRepositoryFilter.DEFAULT_ORDER + 15)
+@Order(DockerAuthFilter.FILTER_ORDER)
 public class DockerAuthFilter extends OncePerRequestFilter {
+  static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 15;
+
   private final RepositoryRuntimeRegistry registry;
   private final DockerAuthService authService;
   private final SecurityAuthenticationService authenticationService;
@@ -134,9 +136,11 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE,
           authService.registryCatalogChallenge(tokenRealm(request), service(request)));
     } else {
+      String challengeRepository = target.connectorRoute() ? target.path().imageName() : target.repository();
+      String challengeImageName = target.connectorRoute() ? null : target.path().imageName();
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE,
           authService.challenge(
-              tokenRealm(request), service(request), target.repository(), target.path().imageName(), actions));
+              tokenRealm(request), service(request), challengeRepository, challengeImageName, actions));
     }
     response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "authentication required");
   }
@@ -153,7 +157,7 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     String connectorRepository = connectorRepositoryOrNull(request);
     if (connectorRepository != null) {
       try {
-        return new DockerTarget(connectorRepository, parser.parse(raw));
+        return new DockerTarget(connectorRepository, parser.parse(raw), true);
       } catch (DockerProtocolException e) {
         return null;
       }
@@ -164,7 +168,7 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     }
     String repository = raw.substring(0, slash);
     try {
-      return new DockerTarget(repository, parser.parse(raw.substring(slash + 1)));
+      return new DockerTarget(repository, parser.parse(raw.substring(slash + 1)), false);
     } catch (DockerProtocolException e) {
       return null;
     }
@@ -259,6 +263,6 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     return scheme + "://" + request.getServerName() + (defaultPort ? "" : ":" + port);
   }
 
-  private record DockerTarget(String repository, DockerPath path) {
+  private record DockerTarget(String repository, DockerPath path, boolean connectorRoute) {
   }
 }

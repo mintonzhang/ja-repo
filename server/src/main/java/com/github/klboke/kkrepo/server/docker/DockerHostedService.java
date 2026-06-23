@@ -12,6 +12,8 @@ import java.io.InputStream;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -19,14 +21,34 @@ public class DockerHostedService {
   private final DockerBlobStore blobStore;
   private final DockerManifestStore manifestStore;
   private final DockerUploadService uploadService;
+  private final DockerMetrics metrics;
 
   public DockerHostedService(
       DockerBlobStore blobStore,
       DockerManifestStore manifestStore,
       DockerUploadService uploadService) {
+    this(blobStore, manifestStore, uploadService, (DockerMetrics) null);
+  }
+
+  @Autowired
+  public DockerHostedService(
+      DockerBlobStore blobStore,
+      DockerManifestStore manifestStore,
+      DockerUploadService uploadService,
+      ObjectProvider<DockerMetrics> metricsProvider) {
+    this(blobStore, manifestStore, uploadService,
+        metricsProvider == null ? null : metricsProvider.getIfAvailable());
+  }
+
+  public DockerHostedService(
+      DockerBlobStore blobStore,
+      DockerManifestStore manifestStore,
+      DockerUploadService uploadService,
+      DockerMetrics metrics) {
     this.blobStore = blobStore;
     this.manifestStore = manifestStore;
     this.uploadService = uploadService;
+    this.metrics = metrics;
   }
 
   public DockerResponse getManifest(RepositoryRuntime runtime, String imageName, String reference, boolean headOnly) {
@@ -74,6 +96,13 @@ public class DockerHostedService {
     if (deleted == 0) {
       throw new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, reference);
     }
+    return DockerResponse.noBody(202);
+  }
+
+  public DockerResponse deleteBlob(RepositoryRuntime runtime, DockerDigest digest) {
+    ensureType(runtime, RepositoryType.HOSTED);
+    ensureMutationsAllowed(runtime, "deleting Docker blobs");
+    blobStore.deleteBlob(runtime, digest);
     return DockerResponse.noBody(202);
   }
 
@@ -155,10 +184,17 @@ public class DockerHostedService {
           return descriptor;
         })
         .toList();
+    recordReferrers(runtime, "local", manifests.size());
     return Map.of(
         "schemaVersion", 2,
         "mediaType", DockerConstants.MEDIA_TYPE_OCI_INDEX,
         "manifests", manifests);
+  }
+
+  private void recordReferrers(RepositoryRuntime runtime, String outcome, long count) {
+    if (metrics != null) {
+      metrics.referrers(runtime, outcome, count);
+    }
   }
 
   private static void ensureType(RepositoryRuntime runtime, RepositoryType expected) {

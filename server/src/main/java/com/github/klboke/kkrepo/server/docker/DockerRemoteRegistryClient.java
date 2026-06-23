@@ -5,7 +5,9 @@ import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import io.micrometer.core.instrument.Timer;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DockerRemoteRegistryClient {
   private static final String TOKEN_CACHE_NAMESPACE = "docker-remote-token";
+  private static final int MAX_REDIRECTS = 5;
 
   private final HttpRemoteFetcher fetcher;
   private final OutboundRequestPolicy outboundPolicy;
@@ -35,9 +38,10 @@ public class DockerRemoteRegistryClient {
   private final SharedCache tokenCache;
   private final boolean tokenCacheEnabled;
   private final Duration tokenCacheTtl;
+  private final KkRepoMetrics metrics;
 
   public DockerRemoteRegistryClient(HttpRemoteFetcher fetcher, OutboundRequestPolicy outboundPolicy) {
-    this(fetcher, outboundPolicy, null, true, 300);
+    this(fetcher, outboundPolicy, null, true, 300, null);
   }
 
   @Autowired
@@ -46,12 +50,23 @@ public class DockerRemoteRegistryClient {
       OutboundRequestPolicy outboundPolicy,
       SharedCache tokenCache,
       @Value("${kkrepo.docker.proxy.remote-token-cache.enabled:true}") boolean tokenCacheEnabled,
-      @Value("${kkrepo.docker.proxy.remote-token-cache.ttl-seconds:300}") long tokenCacheTtlSeconds) {
+      @Value("${kkrepo.docker.proxy.remote-token-cache.ttl-seconds:300}") long tokenCacheTtlSeconds,
+      KkRepoMetrics metrics) {
     this.fetcher = fetcher;
     this.outboundPolicy = outboundPolicy;
     this.tokenCache = tokenCache;
     this.tokenCacheEnabled = tokenCacheEnabled;
     this.tokenCacheTtl = tokenCacheTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(tokenCacheTtlSeconds);
+    this.metrics = metrics;
+  }
+
+  public DockerRemoteRegistryClient(
+      HttpRemoteFetcher fetcher,
+      OutboundRequestPolicy outboundPolicy,
+      SharedCache tokenCache,
+      boolean tokenCacheEnabled,
+      long tokenCacheTtlSeconds) {
+    this(fetcher, outboundPolicy, tokenCache, tokenCacheEnabled, tokenCacheTtlSeconds, null);
   }
 
   public HttpRemoteFetcher.Result get(RepositoryRuntime runtime, String remotePath, String accept) throws IOException {
@@ -79,11 +94,19 @@ public class DockerRemoteRegistryClient {
 
   private HttpRemoteFetcher.Result fetch(
       String url, RepositoryRuntime runtime, String bearerToken, String accept) throws IOException {
-    return fetchWithHeaders(url, runtime, bearerToken, accept);
+    return fetchWithHeaders(url, runtime, bearerToken, accept, 0);
   }
 
   private HttpRemoteFetcher.Result fetchWithHeaders(
-      String url, RepositoryRuntime runtime, String bearerToken, String accept) throws IOException {
+      String url,
+      RepositoryRuntime runtime,
+      String bearerToken,
+      String accept,
+      int redirects) throws IOException {
+    Timer.Sample sample = metrics == null ? null : metrics.startTimer();
+    int status = 0;
+    Throwable failure = null;
+    boolean recorded = false;
     try {
       URI uri = outboundPolicy.validateHttpUri(url, "docker remote fetch");
       HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
@@ -97,6 +120,18 @@ public class DockerRemoteRegistryClient {
       }
       HttpResponse<java.io.InputStream> response = tokenClient.send(
           builder.GET().build(), HttpResponse.BodyHandlers.ofInputStream());
+      status = response.statusCode();
+      Optional<String> redirect = redirectLocation(response);
+      if (redirect.isPresent()) {
+        response.body().close();
+        if (redirects >= MAX_REDIRECTS) {
+          throw new IOException("Too many redirects fetching Docker remote " + url);
+        }
+        URI redirected = outboundPolicy.validateHttpUri(uri.resolve(redirect.get()), "docker remote redirect");
+        recordRemote(runtime, "GET", url, status, null, sample);
+        recorded = true;
+        return fetchWithHeaders(redirected.toString(), runtime, bearerToken, accept, redirects + 1);
+      }
       Map<String, String> headers = new LinkedHashMap<>();
       response.headers().map().forEach((k, v) -> {
         if (!v.isEmpty()) headers.put(k, v.get(0));
@@ -104,7 +139,16 @@ public class DockerRemoteRegistryClient {
       return new HttpRemoteFetcher.Result(response.statusCode(), headers, response.body());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new IOException("Interrupted fetching Docker remote " + url, e);
+      IOException wrapped = new IOException("Interrupted fetching Docker remote " + url, e);
+      failure = wrapped;
+      throw wrapped;
+    } catch (IOException | RuntimeException e) {
+      failure = e;
+      throw e;
+    } finally {
+      if (!recorded) {
+        recordRemote(runtime, "GET", url, status, failure, sample);
+      }
     }
   }
 
@@ -134,6 +178,9 @@ public class DockerRemoteRegistryClient {
     String url = bearer.realm()
         + "?service=" + encode(bearer.service())
         + (bearer.scope() == null ? "" : "&scope=" + encode(bearer.scope()));
+    Timer.Sample sample = metrics == null ? null : metrics.startTimer();
+    int status = 0;
+    Throwable failure = null;
     try {
       URI uri = outboundPolicy.validateHttpUri(url, "docker token fetch");
       HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
@@ -142,6 +189,7 @@ public class DockerRemoteRegistryClient {
       basicAuthorization(runtime).ifPresent(value -> builder.header("Authorization", value));
       HttpRequest request = builder.GET().build();
       HttpResponse<String> response = tokenClient.send(request, HttpResponse.BodyHandlers.ofString());
+      status = response.statusCode();
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
         return Optional.empty();
       }
@@ -160,7 +208,14 @@ public class DockerRemoteRegistryClient {
       return Optional.of(new RemoteToken(token, cacheKey, false));
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new IOException("Interrupted fetching Docker remote token", e);
+      IOException wrapped = new IOException("Interrupted fetching Docker remote token", e);
+      failure = wrapped;
+      throw wrapped;
+    } catch (IOException | RuntimeException e) {
+      failure = e;
+      throw e;
+    } finally {
+      recordRemote(runtime, "TOKEN", url, status, failure, sample);
     }
   }
 
@@ -206,6 +261,37 @@ public class DockerRemoteRegistryClient {
         + nullToEmpty(bearer.scope()) + "\n"
         + credentialFingerprint(runtime);
     return runtimeId(runtime) + ":" + sha256(source);
+  }
+
+  private static Optional<String> redirectLocation(HttpResponse<?> response) {
+    int status = response.statusCode();
+    if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+      return response.headers().firstValue("Location").filter(value -> !value.isBlank());
+    }
+    return Optional.empty();
+  }
+
+  private void recordRemote(
+      RepositoryRuntime runtime, String method, String url, int status, Throwable failure, Timer.Sample sample) {
+    if (metrics == null || sample == null) {
+      return;
+    }
+    metrics.recordProxyRemote(
+        runtime == null ? null : runtime.name(),
+        "docker",
+        method,
+        remoteHost(url),
+        status,
+        failure,
+        sample);
+  }
+
+  private static String remoteHost(String url) {
+    try {
+      return URI.create(url).getHost();
+    } catch (RuntimeException e) {
+      return "unknown";
+    }
   }
 
   private static long runtimeId(RepositoryRuntime runtime) {

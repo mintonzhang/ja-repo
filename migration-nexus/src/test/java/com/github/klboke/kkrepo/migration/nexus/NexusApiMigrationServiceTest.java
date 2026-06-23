@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationPreflight;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.ConfigMigrationCounts;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationTargetBlobStore;
@@ -25,6 +26,84 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 
 class NexusApiMigrationServiceTest {
+
+  @Test
+  void preflightIncludesMigrationPlanDetailsForResultPanel() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")),
+        List.of(
+            repository("maven-releases", "maven2", "hosted", Map.of(
+                "storage", storage("default"))),
+            repository("maven-central", "maven2", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://repo1.maven.org/maven2/"))),
+            repository("maven-public", "maven2", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("maven-releases", "maven-central")))),
+            repository("go-hosted", "go", "hosted", Map.of("storage", storage("default")))),
+        new NexusSecurityExport(
+            List.of(Map.of(
+                "id", "alice",
+                "source", "default",
+                "email", "alice@example.test",
+                "passwordHash", "$shiro1$hash")),
+            List.of(Map.of(
+                "id", "nx-developer",
+                "name", "Developer",
+                "privileges", List.of("nx-repository-view-maven2-*-read"))),
+            List.of(Map.of(
+                "id", "nx-repository-view-maven2-*-read",
+                "type", "repository-view",
+                "properties", Map.of("repository", "*", "format", "maven2", "actions", "read"))),
+            List.of(Map.of(
+                "userId", "alice",
+                "source", "default",
+                "roles", List.of("nx-developer"))),
+            List.of(Map.of(
+                "domain", "NpmToken",
+                "ownerSource", "default",
+                "ownerUserId", "alice",
+                "api_key", "raw-token-value")),
+            List.of(Map.of(
+                "name", "public-maven",
+                "type", "csel",
+                "expression", "format == 'maven2'")),
+            List.of(),
+            List.of("NexusAuthenticatingRealm"),
+            Map.of("enabled", true, "userId", "anonymous")),
+        List.of("security internals exported through script API")),
+        new NexusMigrationTargetBlobStore(
+            "default",
+            "s3",
+            "http://s3.local",
+            "us-east-1",
+            "kkrepo",
+            "migrated",
+            Map.of()));
+
+    assertEquals(1, preflight.blobStorePlans().size());
+    assertEquals("default", preflight.blobStorePlans().get(0).sourceName());
+    assertEquals("s3", preflight.blobStorePlans().get(0).targetType());
+    assertEquals("migrated", preflight.blobStorePlans().get(0).targetPrefix());
+    assertEquals(3, preflight.repositoriesToMigrate().size());
+    assertEquals("maven2-hosted", preflight.repositoriesToMigrate().get(0).recipe());
+    assertEquals(1, preflight.unsupported().size());
+    assertEquals("go-hosted", preflight.unsupported().get(0).name());
+    assertEquals(List.of("maven-releases", "maven-central"), preflight.groupRepositories().get(0).members());
+    assertEquals("https://repo1.maven.org/maven2/", preflight.proxyRemoteRisks().get(0).remoteUrl());
+    assertEquals(1, preflight.security().users());
+    assertEquals("alice", preflight.security().userDetails().get(0).userId());
+    assertTrue(preflight.security().userDetails().get(0).passwordHashPresent());
+    assertEquals("nx-developer", preflight.security().roleDetails().get(0).id());
+    assertEquals(1, preflight.security().privileges());
+    assertEquals("alice", preflight.security().userRoleMappingDetails().get(0).userId());
+    assertEquals("NpmToken", preflight.security().apiKeyDetails().get(0).domain());
+    assertTrue(preflight.security().apiKeyDetails().get(0).rawKeyPresent());
+    assertEquals("public-maven", preflight.security().contentSelectorDetails().get(0).name());
+    assertEquals(List.of("NexusAuthenticatingRealm"), preflight.security().realmOrder());
+  }
 
   @Test
   void migratesSupportedRepositoriesAndKeepsSourceGroupMembers() {

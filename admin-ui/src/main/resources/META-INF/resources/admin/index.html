@@ -38,6 +38,7 @@
           <button class="side-group is-open" type="button">▾ Repository</button>
           <button class="side-item is-active" data-view="repositories" type="button">▥ Repositories</button>
           <button class="side-item" data-view="blobstores" type="button">▤ Blob Stores</button>
+          <button class="side-item" data-view="docker-registry" type="button">▧ Docker Registry</button>
           <button class="side-group is-open" type="button">▾ Security</button>
           <button class="side-item" data-view="security-users" type="button">◉ Users</button>
           <button class="side-item" data-view="security-roles" type="button">◈ Roles</button>
@@ -151,12 +152,17 @@
             </fieldset>
             <fieldset class="form-grid" id="repository-docker-fields" hidden>
               <legend>Docker connector</legend>
+              <p class="form-note full-width">
+                Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use
+                path-based Docker routing on the main service port; enable it only when clients need a dedicated
+                /v2/ port or isolated upload/download traffic.
+              </p>
               <label class="checkbox-field">
                 <input id="repository-docker-connector-enabled" type="checkbox">
-                <span>Connector enabled</span>
+                <span>Enable HTTP connector</span>
               </label>
               <label>
-                <span>Connector port</span>
+                <span>Connector port (optional)</span>
                 <input id="repository-docker-connector-port" type="number" min="1" max="65535" placeholder="5000">
               </label>
               <label class="full-width">
@@ -318,6 +324,35 @@
               </thead>
               <tbody id="blobstore-table"></tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="view" id="docker-registry-view">
+          <div class="page-heading">
+            <span class="heading-icon">▧</span>
+            <h1>Docker Registry</h1>
+            <span class="heading-copy">Manage Docker connector runtime and repository cache</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="docker-connectors-refresh-button" type="button">↻ Refresh connectors</button>
+            <button class="create-button secondary" id="docker-cache-clear-button" type="button">Clear Docker cache</button>
+          </div>
+          <div class="docker-ops-layout">
+            <section class="ops-panel">
+              <div class="ops-panel-head">Connector runtime</div>
+              <div class="summary-grid compact-summary" id="docker-connector-summary"></div>
+              <div class="nx-table-frame">
+                <table class="nx-table compact docker-connector-table">
+                  <thead><tr><th>Repository</th><th>Type</th><th>Port</th><th>Public URL</th><th>State</th><th>Active</th></tr></thead>
+                  <tbody id="docker-connector-table"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="ops-panel">
+              <div class="ops-panel-head">Transfer limits</div>
+              <div class="summary-grid compact-summary" id="docker-transfer-summary"></div>
+              <div class="ops-status" id="docker-operations-status"></div>
+            </section>
           </div>
         </section>
 
@@ -791,6 +826,6 @@
       </main>
     </div>
 
-    <script src="./assets/admin.js?v=20260609-user-menu-1"></script>
+    <script src="./assets/admin.js?v=20260623-migration-preflight-1"></script>
   </body>
 </html>

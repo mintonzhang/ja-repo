@@ -49,6 +49,7 @@ services:
     ports:
       - "${KKREPO_COMPAT_PORT:-18090}:8080"
       - "${KKREPO_MANAGEMENT_PORT:-18091}:8081"
+      - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:18180"
 
 volumes:
   mysql-data:

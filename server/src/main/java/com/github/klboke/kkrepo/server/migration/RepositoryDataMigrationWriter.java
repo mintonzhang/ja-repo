@@ -633,7 +633,7 @@ class RepositoryDataMigrationWriter {
     LinkedHashMap<String, Object> docker = new LinkedHashMap<>();
     docker.put("kind", dockerAssetKind(source.sourcePath()));
     dockerBlobMigrationTarget(source.sourcePath()).ifPresent(target -> {
-      docker.put("imageName", target.imageName());
+      putIfPresent(docker, "imageName", target.imageName());
       docker.put("digest", target.digest().value());
     });
     dockerManifestMigrationTarget(source.sourcePath()).ifPresent(target -> {
@@ -753,11 +753,10 @@ class RepositoryDataMigrationWriter {
       return Optional.empty();
     }
     List<String> imageSegments = dockerImageSegments(segments, blob);
-    if (imageSegments.isEmpty()) {
-      return Optional.empty();
+    String imageName = imageSegments.isEmpty() ? null : String.join("/", imageSegments);
+    if (imageName != null) {
+      DockerPathParser.validateImageName(imageName);
     }
-    String imageName = String.join("/", imageSegments);
-    DockerPathParser.validateImageName(imageName);
     return Optional.of(new DockerBlobMigrationTarget(imageName, DockerDigest.parse(segments.get(blob + 1))));
   }
 
@@ -770,8 +769,12 @@ class RepositoryDataMigrationWriter {
     if (endpointIndex <= 0) {
       return List.of();
     }
-    int start = endpointIndex > 1 && "v2".equals(segments.get(0)) ? 1 : 0;
-    return segments.subList(start, endpointIndex);
+    int start = "v2".equals(segments.get(0)) ? 1 : 0;
+    List<String> imageSegments = segments.subList(start, endpointIndex);
+    if (imageSegments.size() == 1 && "-".equals(imageSegments.get(0))) {
+      return List.of();
+    }
+    return imageSegments;
   }
 
   private static List<String> normalizedSegments(String path) {

@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
@@ -39,6 +40,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class RepositoryService {
@@ -61,6 +64,7 @@ public class RepositoryService {
   private final GroupMemberAssetCache groupMemberAssetCache;
   private final NexusLikeCacheController cacheController;
   private final RepositoryCatalogCache repositoryCatalogCache;
+  private final DockerConnectorRuntime dockerConnectorRuntime;
   private final String urlPrefix;
   private final int serverPort;
   private final int managementPort;
@@ -80,6 +84,7 @@ public class RepositoryService {
       GroupMemberAssetCache groupMemberAssetCache,
       NexusLikeCacheController cacheController,
       RepositoryCatalogCache repositoryCatalogCache,
+      DockerConnectorRuntime dockerConnectorRuntime,
       @Value("${kkrepo.compatibility.repository-url-prefix:/repository}") String urlPrefix,
       @Value("${server.port:8080}") int serverPort,
       @Value("${management.server.port:${server.port:8080}}") int managementPort) {
@@ -96,6 +101,7 @@ public class RepositoryService {
     this.groupMemberAssetCache = groupMemberAssetCache;
     this.cacheController = cacheController;
     this.repositoryCatalogCache = repositoryCatalogCache;
+    this.dockerConnectorRuntime = dockerConnectorRuntime;
     this.urlPrefix = urlPrefix;
     this.serverPort = serverPort;
     this.managementPort = managementPort;
@@ -108,7 +114,8 @@ public class RepositoryService {
       RepositoryRuntimeRegistry runtimeRegistry,
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
-        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, urlPrefix, 8080, 8080);
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
+        urlPrefix, 8080, 8080);
   }
 
   public RepositoryService(
@@ -119,7 +126,8 @@ public class RepositoryService {
       NexusLikeCacheController cacheController,
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
-        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, cacheController, null, urlPrefix, 8080, 8080);
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, cacheController, null, null,
+        urlPrefix, 8080, 8080);
   }
 
   RepositoryService(
@@ -131,7 +139,7 @@ public class RepositoryService {
       int serverPort,
       int managementPort) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
-        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, urlPrefix,
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, urlPrefix,
         serverPort, managementPort);
   }
 
@@ -225,6 +233,7 @@ public class RepositoryService {
     NexusRepositorySecurityContributor.ensureRepositoryPrivileges(securityDao, recipe.format(), name);
     invalidateAuthorizationCacheAfterCommit();
     refreshRepositoryCatalogAfterCommit();
+    syncDockerConnectorsAfterCommit(recipe.format());
     return get(name);
   }
 
@@ -310,6 +319,7 @@ public class RepositoryService {
     invalidateRuntimeCache(existing.id(), name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
+    syncDockerConnectorsAfterCommit(existing.format());
     return get(name);
   }
 
@@ -339,6 +349,7 @@ public class RepositoryService {
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     invalidateAuthorizationCacheAfterCommit();
     refreshRepositoryCatalogAfterCommit();
+    syncDockerConnectorsAfterCommit(existing.format());
   }
 
   @Transactional
@@ -507,6 +518,22 @@ public class RepositoryService {
     if (repositoryCatalogCache != null) {
       repositoryCatalogCache.refreshAfterCommit();
     }
+  }
+
+  private void syncDockerConnectorsAfterCommit(RepositoryFormat format) {
+    if (dockerConnectorRuntime == null || format != RepositoryFormat.DOCKER) {
+      return;
+    }
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      dockerConnectorRuntime.sync();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override
+      public void afterCommit() {
+        dockerConnectorRuntime.sync();
+      }
+    });
   }
 
   private void invalidateNpmMemberAfterCommit(RepositoryFormat format, long repositoryId) {

@@ -14,6 +14,8 @@ import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
+import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
+import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -107,6 +109,33 @@ class DockerBlobStoreTest {
             "127.0.0.1"));
 
     assertTrue(storage.deleted.isEmpty());
+  }
+
+  @Test
+  void putVerifiedBlobDeletesUploadedObjectWhenStreamDigestDoesNotMatchExpectedDigest() {
+    DockerDigest expected = DockerDigest.parse(
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+    RecordingAssetDao assetDao = new RecordingAssetDao(null);
+    RecordingBlobStorage storage = new RecordingBlobStorage();
+    DockerBlobStore blobStore = new DockerBlobStore(
+        assetDao,
+        new FixedBlobStorageRegistry(storage),
+        mock(AssetMetadataCache.class),
+        null);
+
+    DockerProtocolException thrown = org.junit.jupiter.api.Assertions.assertThrows(DockerProtocolException.class,
+        () -> blobStore.putVerifiedBlob(
+            runtime(),
+            expected,
+            new ByteArrayInputStream("actual-content".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+            "actual-content".length(),
+            "application/octet-stream",
+            "alice",
+            "127.0.0.1"));
+
+    assertEquals(DockerErrorCode.DIGEST_INVALID, thrown.code());
+    assertEquals(1, storage.deleted.size());
+    assertEquals("docker/blobs/sha256/dd/" + expected.hex(), storage.deleted.get(0).objectKey());
   }
 
   private static RepositoryRuntime runtime() {

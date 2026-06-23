@@ -323,6 +323,13 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 <host>:<repo-port>/<image>:<tag>
 ```
 
+本地开发环境可以用真实客户端矩阵脚本做 hosted push/pull、proxy pull、group pull
+以及可选的 ORAS/Skopeo smoke：
+
+```bash
+scripts/docker-compat/client-compat.sh
+```
+
 不要假设 Docker pull/push 可以通过 `/repository/<repo>/...` 工作。
 
 ## 客户端配置排障

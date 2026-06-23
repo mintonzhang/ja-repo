@@ -8,8 +8,10 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
@@ -129,6 +131,31 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void createAllowsDockerRepositoryWithoutConnectorPortWhenConnectorIsDisabled() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "docker-hosted",
+        "docker-hosted",
+        true,
+        "default",
+        true,
+        new HostedSettings("ALLOW", null, null),
+        null,
+        null,
+        new DockerSettings(false, null, null),
+        null));
+
+    assertEquals("docker-hosted", created.name());
+    assertEquals(false, created.docker().connectorEnabled());
+    assertNull(created.docker().connectorPort());
+    Map<?, ?> docker = (Map<?, ?>) repositories.repository.attributes().get("docker");
+    assertEquals(false, docker.get("connectorEnabled"));
+    assertNull(docker.get("connectorPort"));
+  }
+
+  @Test
   void createRejectsDockerConnectorPortThatConflictsWithServerPort() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories, 18090, 18091);
@@ -243,7 +270,7 @@ class RepositoryServiceTest {
     return new RepositoryService(
         repositories,
         new StubBlobStoreDao(),
-        null,
+        new StubSecurityDao(),
         new RepositoryRuntimeRegistry(repositories, 0),
         "/repository");
   }
@@ -252,7 +279,7 @@ class RepositoryServiceTest {
     return new RepositoryService(
         repositories,
         new StubBlobStoreDao(),
-        null,
+        new StubSecurityDao(),
         new RepositoryRuntimeRegistry(repositories, 0),
         "/repository",
         serverPort,
@@ -411,6 +438,31 @@ class RepositoryServiceTest {
     @Override
     public List<BlobStoreRecord> list() {
       return stores;
+    }
+  }
+
+  private static final class StubSecurityDao extends SecurityDao {
+    private final List<SecurityPrivilegeRecord> privileges = new ArrayList<>();
+
+    private StubSecurityDao() {
+      super(null, null);
+    }
+
+    @Override
+    public void insertPrivilegeIfAbsent(SecurityPrivilegeRecord record) {
+      if (privileges.stream().noneMatch(existing -> existing.privilegeId().equals(record.privilegeId()))) {
+        privileges.add(record);
+      }
+    }
+
+    @Override
+    public void removePrivilegeReferences(String privilegeId) {
+    }
+
+    @Override
+    public int deletePrivilege(String privilegeId) {
+      boolean removed = privileges.removeIf(record -> record.privilegeId().equals(privilegeId));
+      return removed ? 1 : 0;
     }
   }
 
