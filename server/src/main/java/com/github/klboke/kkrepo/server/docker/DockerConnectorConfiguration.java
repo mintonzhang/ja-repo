@@ -1,8 +1,5 @@
 package com.github.klboke.kkrepo.server.docker;
 
-import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -10,7 +7,6 @@ import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.catalina.connector.Connector;
 import org.springframework.beans.factory.ObjectProvider;
@@ -79,23 +75,5 @@ public class DockerConnectorConfiguration {
         || uri.equals("/v2/")
         || uri.startsWith("/v2/")
         || uri.equals("/service/rest/v1/docker/token");
-  }
-
-  static Map<Integer, String> connectorPorts(RepositoryDao repositoryDao) {
-    Map<Integer, String> ports = new LinkedHashMap<>();
-    for (RepositoryRecord record : repositoryDao.list()) {
-      if (record.format() != RepositoryFormat.DOCKER || record.attributes() == null) {
-        continue;
-      }
-      DockerConnectorManager.DockerSettings docker = DockerConnectorManager.dockerSettings(record);
-      if (docker == null) {
-        continue;
-      }
-      if (!docker.connectorEnabled() || docker.connectorPort() == null) {
-        continue;
-      }
-      ports.put(docker.connectorPort(), record.name());
-    }
-    return Map.copyOf(ports);
   }
 }

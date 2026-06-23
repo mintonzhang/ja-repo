@@ -27,10 +27,6 @@ public class DockerMetrics {
         snapshot -> snapshot.maxConcurrentDownloads());
   }
 
-  public DockerMetrics(MeterRegistry registry) {
-    this.registry = registry;
-  }
-
   public void uploadSession(RepositoryRuntime runtime, String action, String outcome) {
     counter("kkrepo_docker_upload_sessions_total", "Docker upload session operations",
         runtimeTags(runtime).and("action", tag(action), "outcome", tag(outcome))).increment();

@@ -112,10 +112,6 @@ public class DockerConnectorRuntime implements ApplicationListener<ApplicationRe
     }
   }
 
-  private boolean connectorExists(org.apache.catalina.Service service, int port) {
-    return connector(service, port) != null;
-  }
-
   private Connector connector(org.apache.catalina.Service service, int port) {
     for (Connector connector : service.findConnectors()) {
       if (connector.getPort() == port) {
