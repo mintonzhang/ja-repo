@@ -106,6 +106,29 @@ class ContentSelectorExpressionEvaluatorTest {
   }
 
   @Test
+  void regexOperatorRequiresLiteralPattern() {
+    assertFalse(ContentSelectorExpressionEvaluator.matches(
+        "path =~ repository.name",
+        ".*",
+        "raw",
+        "public/readme.txt"));
+  }
+
+  @Test
+  void supportsSimpleLeadingNegativeLookaheadWithoutJdkRegex() {
+    assertTrue(ContentSelectorExpressionEvaluator.matches(
+        "path =~ \"(?!.*private.*).*\"",
+        "raw-hosted",
+        "raw",
+        "public/readme.txt"));
+    assertFalse(ContentSelectorExpressionEvaluator.matches(
+        "path =~ \"(?!.*private.*).*\"",
+        "raw-hosted",
+        "raw",
+        "private/secret.txt"));
+  }
+
+  @Test
   void unsupportedExpressionsFailClosed() {
     assertFalse(ContentSelectorExpressionEvaluator.matches(
         "path == ",

@@ -4,11 +4,12 @@ import com.github.klboke.kkrepo.protocol.maven.path.Coordinates;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
+import com.google.re2j.Pattern;
+import com.google.re2j.PatternSyntaxException;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.PatternSyntaxException;
 
 final class ContentSelectorExpressionEvaluator {
   private static final MavenPathParser MAVEN_PATH_PARSER = new MavenPathParser();
@@ -93,6 +94,41 @@ final class ContentSelectorExpressionEvaluator {
 
   private static String stringOrEmpty(String value) {
     return value == null ? "" : value;
+  }
+
+  private static boolean safeRegexMatches(String regex, String value) {
+    String normalizedRegex = regex == null ? "" : regex;
+    String normalizedValue = value == null ? "" : value;
+    Boolean simpleNegativeLookahead = simpleLeadingNegativeLookaheadMatches(normalizedRegex, normalizedValue);
+    if (simpleNegativeLookahead != null) {
+      return simpleNegativeLookahead;
+    }
+    try {
+      return Pattern.matches(normalizedRegex, normalizedValue);
+    } catch (PatternSyntaxException e) {
+      return false;
+    }
+  }
+
+  private static Boolean simpleLeadingNegativeLookaheadMatches(String regex, String value) {
+    if (!regex.startsWith("(?!")) {
+      return null;
+    }
+    int end = regex.indexOf(')', 3);
+    if (end < 0) {
+      return null;
+    }
+    String forbiddenRegex = regex.substring(3, end);
+    String tailRegex = regex.substring(end + 1);
+    if (forbiddenRegex.contains("(?") || tailRegex.contains("(?")) {
+      return null;
+    }
+    try {
+      return !Pattern.compile(forbiddenRegex).matcher(value).lookingAt()
+          && Pattern.matches(tailRegex.isBlank() ? ".*" : tailRegex, value);
+    } catch (PatternSyntaxException e) {
+      return false;
+    }
   }
 
   private record Token(TokenType type, String value) {
@@ -284,7 +320,7 @@ final class ContentSelectorExpressionEvaluator {
         return !equalsValue(left, operand());
       }
       if (match(TokenType.REGEX)) {
-        return regexMatches(left, operand());
+        return regexMatches(left, regexOperand());
       }
       if (match(TokenType.STARTS_WITH)) {
         return startsWith(left, operand());
@@ -309,6 +345,14 @@ final class ContentSelectorExpressionEvaluator {
       throw new IllegalArgumentException("Expected operand: " + token.type());
     }
 
+    private Value regexOperand() {
+      Token token = peek();
+      if (match(TokenType.STRING)) {
+        return new Value(token.value(), null, null);
+      }
+      throw new IllegalArgumentException("Expected regex string literal: " + token.type());
+    }
+
     private boolean equalsValue(Value left, Value right) {
       if (isCoordinateExtension(left) || isCoordinateExtension(right)) {
         return stripLeadingDots(defaultString(left.text()))
@@ -330,17 +374,13 @@ final class ContentSelectorExpressionEvaluator {
     private boolean regexMatches(Value left, Value right) {
       String value = defaultString(left.text());
       String regex = defaultString(right.text());
-      try {
-        if (value.matches(regex)) {
-          return true;
-        }
-        if (isPath(left) && !value.startsWith("/") && ("/" + value).matches(regex)) {
-          return true;
-        }
-        return isPath(left) && value.matches(stripSimpleLeadingSlashRegex(regex));
-      } catch (PatternSyntaxException e) {
-        return false;
+      if (safeRegexMatches(regex, value)) {
+        return true;
       }
+      if (isPath(left) && !value.startsWith("/") && safeRegexMatches(regex, "/" + value)) {
+        return true;
+      }
+      return isPath(left) && safeRegexMatches(stripSimpleLeadingSlashRegex(regex), value);
     }
 
     private boolean startsWith(Value left, Value right) {

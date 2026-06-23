@@ -40,6 +40,7 @@
     <apollo.client.version>2.5.0</apollo.client.version>
     <guava.version>33.6.0-jre</guava.version>
     <guice.version>7.0.0</guice.version>
+    <re2j.version>1.7</re2j.version>
     <maven.artifact.version>3.9.16</maven.artifact.version>
     <aws.sdk.version>2.46.15</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
@@ -92,6 +93,11 @@
         <groupId>com.google.inject</groupId>
         <artifactId>guice</artifactId>
         <version>${guice.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.google.re2j</groupId>
+        <artifactId>re2j</artifactId>
+        <version>${re2j.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.commons</groupId>

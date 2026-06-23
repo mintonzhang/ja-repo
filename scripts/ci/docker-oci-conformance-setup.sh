@@ -38,6 +38,28 @@ wait_for_http() {
   return 1
 }
 
+wait_for_docker_registry() {
+  local label="$1"
+  local url="$2"
+  local headers_file http_code
+  headers_file="$(mktemp)"
+  for ((i = 1; i <= START_TIMEOUT_SECONDS; i++)); do
+    http_code="$(curl -m 5 -sS -D "$headers_file" -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)"
+    if [[ "$http_code" == "200" || "$http_code" == "401" ]]; then
+      if grep -qi '^Docker-Distribution-API-Version:[[:space:]]*registry/2\.0' "$headers_file"; then
+        rm -f "$headers_file"
+        log "$label is ready"
+        return 0
+      fi
+    fi
+    : >"$headers_file"
+    sleep 1
+  done
+  rm -f "$headers_file"
+  log "timed out waiting for $label at $url"
+  return 1
+}
+
 initialize_kkrepo_admin() {
   wait_for_http "kkrepo bootstrap endpoint" "$KKREPO_URL/internal/security/bootstrap"
 
@@ -138,6 +160,6 @@ initialize_kkrepo_admin
 ensure_kkrepo_blob_store
 ensure_kkrepo_docker_repository
 refresh_docker_connectors
-wait_for_http "kkrepo Docker connector" "http://127.0.0.1:$KKREPO_DOCKER_PORT/v2/"
+wait_for_docker_registry "kkrepo Docker connector" "http://127.0.0.1:$KKREPO_DOCKER_PORT/v2/"
 
 log "Docker OCI conformance environment is ready"
