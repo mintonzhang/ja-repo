@@ -46,7 +46,6 @@ public class OidcLoginController {
   private final ObjectMapper objectMapper;
   private final HttpClient httpClient;
   private final OutboundRequestPolicy outboundPolicy;
-  private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final String externalBaseUrl;
   private final SharedCache sharedCache;
   private final SecureRandom secureRandom = new SecureRandom();
@@ -56,13 +55,11 @@ public class OidcLoginController {
       SecurityAuthenticationService authenticationService,
       ObjectMapper objectMapper,
       OutboundRequestPolicy outboundPolicy,
-      ForwardedHeaderPolicy forwardedHeaderPolicy,
       SharedCache sharedCache,
       @Value("${kkrepo.security.external-base-url:}") String externalBaseUrl) {
     this.authenticationService = authenticationService;
     this.objectMapper = objectMapper;
     this.outboundPolicy = outboundPolicy;
-    this.forwardedHeaderPolicy = forwardedHeaderPolicy;
     this.sharedCache = sharedCache;
     this.externalBaseUrl = asString(externalBaseUrl);
     this.httpClient = HttpClient.newHttpClient();
@@ -75,7 +72,6 @@ public class OidcLoginController {
         authenticationService,
         objectMapper,
         OutboundRequestPolicy.allowPrivateForTests(),
-        new ForwardedHeaderPolicy(""),
         null,
         "");
   }
@@ -122,7 +118,7 @@ public class OidcLoginController {
     SecurityRealmRecord realm = activeOidcRealm();
     Map<String, Object> config = attributes(realm);
     String clientId = required(config, "clientId", "audience");
-    String redirectUri = redirectUri(request, config);
+    String redirectUri = redirectUri(config);
     String state = randomToken();
     HttpSession session = request.getSession(true);
     session.setAttribute(OIDC_STATE_ATTRIBUTE, state);
@@ -134,8 +130,13 @@ public class OidcLoginController {
     params.put("redirect_uri", redirectUri);
     params.put("scope", defaultString(stringConfig(config, "scopes", "scope"), DEFAULT_SCOPES));
     params.put("state", state);
-    String authorizationEndpoint = endpoint(config, "authorizationEndpoint", "authorizationEndpointUri", "authorization_endpoint");
-    response.sendRedirect(authorizationEndpoint + querySeparator(authorizationEndpoint) + form(params));
+    OidcEndpoint authorizationEndpoint = endpoint(
+        config,
+        "OIDC authorization endpoint",
+        "authorizationEndpoint",
+        "authorizationEndpointUri",
+        "authorization_endpoint");
+    sendRedirectToOidcEndpoint(response, authorizationEndpoint, form(params));
   }
 
   @GetMapping("/oidc/callback")
@@ -162,7 +163,7 @@ public class OidcLoginController {
     Map<String, Object> config = attributes(realm);
     String token = firstNonBlank(idToken, accessToken);
     if (token == null && code != null && !code.isBlank()) {
-      Map<String, Object> tokenResponse = exchangeCode(config, code, redirectUri(request, config));
+      Map<String, Object> tokenResponse = exchangeCode(config, code, redirectUri(config));
       token = firstNonBlank(asString(tokenResponse.get("id_token")), asString(tokenResponse.get("access_token")));
     }
     if (token == null) {
@@ -198,7 +199,12 @@ public class OidcLoginController {
       String code,
       String redirectUri) {
     String clientId = required(config, "clientId", "audience");
-    String tokenEndpoint = endpoint(config, "tokenEndpoint", "tokenEndpointUri", "token_endpoint");
+    OidcEndpoint tokenEndpoint = endpoint(
+        config,
+        "OIDC token endpoint",
+        "tokenEndpoint",
+        "tokenEndpointUri",
+        "token_endpoint");
     Map<String, String> body = new LinkedHashMap<>();
     body.put("grant_type", "authorization_code");
     body.put("code", code);
@@ -208,8 +214,7 @@ public class OidcLoginController {
     if (clientSecret != null) {
       body.put("client_secret", clientSecret);
     }
-    HttpRequest tokenRequest = HttpRequest.newBuilder(
-            outboundPolicy.validateHttpUri(tokenEndpoint, "OIDC token endpoint"))
+    HttpRequest tokenRequest = HttpRequest.newBuilder(tokenEndpoint.uri())
         .header("Content-Type", MediaType.APPLICATION_FORM_URLENCODED_VALUE)
         .POST(HttpRequest.BodyPublishers.ofString(form(body)))
         .build();
@@ -227,19 +232,27 @@ public class OidcLoginController {
     }
   }
 
-  private String endpoint(Map<String, Object> config, String... keys) {
+  private OidcEndpoint endpoint(Map<String, Object> config, String purpose, String... keys) {
     String direct = stringConfig(config, keys);
     if (direct != null) {
-      return direct;
+      return validatedEndpoint(direct, purpose);
     }
     Map<String, Object> discovery = discovery(config);
     for (String key : keys) {
       String discovered = asString(discovery.get(key));
       if (discovered != null) {
-        return discovered;
+        return validatedEndpoint(discovered, purpose);
       }
     }
     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC endpoint is not configured: " + String.join("/", keys));
+  }
+
+  private OidcEndpoint validatedEndpoint(String rawUrl, String purpose) {
+    URI uri = outboundPolicy.validateHttpUri(rawUrl, purpose);
+    if (uri.getRawFragment() != null) {
+      throw new SecurityValidationException(purpose + " URL must not include a fragment");
+    }
+    return new OidcEndpoint(uri, uri.getHost());
   }
 
   private Map<String, Object> discovery(Map<String, Object> config) {
@@ -251,7 +264,9 @@ public class OidcLoginController {
     if (sharedCache != null) {
       Optional<Map<String, Object>> cached = sharedCache.getJson(DISCOVERY_CACHE_NAMESPACE, uri, JSON_MAP);
       if (cached.isPresent()) {
-        return cached.get();
+        Map<String, Object> document = cached.get();
+        validateDiscoveryDocument(config, document);
+        return document;
       }
     }
     try {
@@ -262,6 +277,7 @@ public class OidcLoginController {
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC discovery endpoint returned " + response.statusCode());
       }
       Map<String, Object> document = objectMapper.readValue(response.body(), JSON_MAP);
+      validateDiscoveryDocument(config, document);
       if (sharedCache != null) {
         sharedCache.putJson(DISCOVERY_CACHE_NAMESPACE, uri, document, java.time.Duration.ofSeconds(300));
       }
@@ -274,31 +290,41 @@ public class OidcLoginController {
     }
   }
 
-  private String redirectUri(HttpServletRequest request, Map<String, Object> config) {
+  private void validateDiscoveryDocument(Map<String, Object> config, Map<String, Object> document) {
+    String configuredIssuer = stringConfig(config, "issuerUri", "issuer");
+    if (configuredIssuer == null) {
+      return;
+    }
+    String discoveredIssuer = asString(document.get("issuer"));
+    String expectedIssuer = stripTrailingSlash(configuredIssuer);
+    if (!expectedIssuer.equals(discoveredIssuer)) {
+      throw new SecurityValidationException("OIDC discovery issuer must match configured issuer");
+    }
+  }
+
+  private void sendRedirectToOidcEndpoint(
+      HttpServletResponse response,
+      OidcEndpoint endpoint,
+      String query) throws IOException {
+    URI uri = endpoint.uri();
+    String authorizedHost = endpoint.authorizedRedirectHost();
+    if (!authorizedHost.equals(uri.getHost())) {
+      throw new SecurityValidationException("OIDC authorization endpoint host changed after validation");
+    }
+    response.sendRedirect(appendQuery(uri, query));
+  }
+
+  private String redirectUri(Map<String, Object> config) {
     String configured = stringConfig(config, "redirectUri", "redirect_uri");
     if (configured != null) {
       return configured;
     }
     if (externalBaseUrl != null) {
-      return stripTrailingSlash(externalBaseUrl) + request.getContextPath() + "/internal/security/oidc/callback";
+      return stripTrailingSlash(externalBaseUrl) + "/internal/security/oidc/callback";
     }
-    return externalBaseUri(request) + request.getContextPath() + "/internal/security/oidc/callback";
-  }
-
-  private String externalBaseUri(HttpServletRequest request) {
-    boolean trustedForwarded = forwardedHeaderPolicy.trusted(request);
-    String proto = trustedForwarded
-        ? defaultString(firstForwarded(request.getHeader("X-Forwarded-Proto")), request.getScheme())
-        : request.getScheme();
-    String host = trustedForwarded ? firstForwarded(request.getHeader("X-Forwarded-Host")) : null;
-    if (host == null) {
-      host = request.getServerName();
-      int port = request.getServerPort();
-      if (port > 0 && !host.contains(":") && !defaultPort(proto, port)) {
-        host += ":" + port;
-      }
-    }
-    return proto + "://" + host;
+    throw new ResponseStatusException(
+        HttpStatus.BAD_REQUEST,
+        "OIDC redirectUri or kkrepo.security.external-base-url must be configured");
   }
 
   private String randomToken() {
@@ -351,25 +377,13 @@ public class OidcLoginController {
     return builder.toString();
   }
 
-  private static String querySeparator(String uri) {
-    return uri.contains("?") ? "&" : "?";
+  private static String appendQuery(URI uri, String query) {
+    String raw = uri.toString();
+    return raw + (uri.getRawQuery() == null ? "?" : "&") + query;
   }
 
   private static String urlEncode(String value) {
     return URLEncoder.encode(value, StandardCharsets.UTF_8);
-  }
-
-  private static String firstForwarded(String header) {
-    if (header == null || header.isBlank()) {
-      return null;
-    }
-    String first = header.split(",", 2)[0].trim();
-    return first.isBlank() ? null : first;
-  }
-
-  private static boolean defaultPort(String proto, int port) {
-    return ("http".equalsIgnoreCase(proto) && port == 80)
-        || ("https".equalsIgnoreCase(proto) && port == 443);
   }
 
   private static String stripTrailingSlash(String value) {
@@ -409,5 +423,8 @@ public class OidcLoginController {
   }
 
   public record LoginResult(String returnTo) {
+  }
+
+  private record OidcEndpoint(URI uri, String authorizedRedirectHost) {
   }
 }
