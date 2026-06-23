@@ -1,5 +1,5 @@
 ---
-agent: agent
+mode: agent
 description: Summarize compatibility and distributed-state risks in a kkRepo change.
 ---
 
