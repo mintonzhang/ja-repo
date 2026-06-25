@@ -425,13 +425,15 @@ public class SecurityManagementService implements AccessDecisionService {
 
     List<RealmCommand> commands = new ArrayList<>();
     for (SecurityRealmRecord existing : securityDao.listRealms()) {
-      boolean enabled = requested.contains(existing.realmId());
+      boolean requiredLocal = "local".equals(existing.realmId());
+      boolean enabled = requiredLocal || requested.contains(existing.realmId());
+      Integer requestedPriority = priorities.get(existing.realmId());
       commands.add(new RealmCommand(
           existing.realmId(),
           existing.type(),
           existing.name(),
           enabled,
-          enabled ? priorities.get(existing.realmId()) : existing.priority(),
+          requestedPriority == null ? existing.priority() : requestedPriority,
           existing.attributes()));
     }
     return saveRealms(commands);
@@ -465,7 +467,9 @@ public class SecurityManagementService implements AccessDecisionService {
           realmId,
           defaultString(command.type(), existing == null ? realmId.toUpperCase(Locale.ROOT) : existing.type()),
           defaultString(command.name(), existing == null ? realmId : existing.name()),
-          command.enabled() == null ? existing != null && existing.enabled() : command.enabled(),
+          "local".equals(realmId) || (command.enabled() == null
+              ? existing != null && existing.enabled()
+              : command.enabled()),
           command.priority() == null ? defaultPriority : command.priority(),
           command.attributes() == null && existing != null ? existing.attributes() : copyMap(command.attributes()));
       securityDao.upsertRealm(record);
@@ -649,9 +653,7 @@ public class SecurityManagementService implements AccessDecisionService {
     }
     String realmName = defaultString(command.realmName(), DEFAULT_ANONYMOUS_REALM_NAME);
     validateAnonymousRealmName(realmName);
-    String userSource = blankToNull(command.userSource()) == null
-        ? sourceForAnonymousRealm(realmName)
-        : normalizeSource(command.userSource());
+    String userSource = DEFAULT_SOURCE;
     String userId = defaultString(command.userId(), DEFAULT_ANONYMOUS_USER_ID);
     securityDao.upsertAnonymousConfig(new SecurityAnonymousConfigRecord(
         Boolean.TRUE.equals(command.enabled()),
@@ -1155,9 +1157,7 @@ public class SecurityManagementService implements AccessDecisionService {
     String realmName = defaultString(record.realmName(), DEFAULT_ANONYMOUS_REALM_NAME);
     return new AnonymousSettingsView(
         record.enabled(),
-        blankToNull(record.userSource()) == null
-            ? sourceForAnonymousRealm(realmName)
-            : normalizeSource(record.userSource()),
+        DEFAULT_SOURCE,
         defaultString(record.userId(), DEFAULT_ANONYMOUS_USER_ID),
         realmName);
   }
@@ -1853,17 +1853,6 @@ public class SecurityManagementService implements AccessDecisionService {
     if (realmId == null || !SUPPORTED_REALMS.contains(realmId)) {
       throw new SecurityValidationException("Realm does not exist: " + realmName);
     }
-  }
-
-  private static String sourceForAnonymousRealm(String realmName) {
-    String normalized = defaultString(realmName, DEFAULT_ANONYMOUS_REALM_NAME).toLowerCase(Locale.ROOT);
-    if (normalized.contains("ldap")) {
-      return "LDAP";
-    }
-    if (normalized.contains("oidc")) {
-      return "OIDC";
-    }
-    return DEFAULT_SOURCE;
   }
 
   private static LdapSettingsCommand emptyLdapSettingsCommand() {

@@ -208,7 +208,6 @@ const securityApiKeyRequiredFields = [
   { id: "security-api-key-owner-user-id", label: "Owner user ID" }
 ];
 const securityAnonymousRequiredFields = [
-  { id: "security-anonymous-source", label: "User source" },
   { id: "security-anonymous-user-id", label: "User ID" },
   { id: "security-anonymous-realm-name", label: "Realm name" }
 ];
@@ -2402,7 +2401,7 @@ async function loadSecurityRealms() {
 function renderSecurityRealms() {
   document.getElementById("security-realm-table").innerHTML = securityRealms.map((realm) => `
     <tr data-realm-id="${escapeHtml(realm.realmId)}">
-      <td><input class="security-realm-enabled" type="checkbox"${realm.enabled ? " checked" : ""}></td>
+      <td><input class="security-realm-enabled" type="checkbox"${realm.enabled || realm.realmId === "local" ? " checked" : ""}${realm.realmId === "local" ? ' disabled title="Local realm is required."' : ""}></td>
       <td><input class="security-realm-priority" type="number" value="${Number(realm.priority) || 0}"></td>
       <td>${escapeHtml(realm.name)} <code>${escapeHtml(realm.realmId)}</code></td>
       <td>${escapeHtml(realm.type)}</td>
@@ -2418,7 +2417,7 @@ async function saveSecurityRealms() {
       realmId: row.dataset.realmId,
       type: realm?.type,
       name: realm?.name,
-      enabled: row.querySelector(".security-realm-enabled").checked,
+      enabled: row.dataset.realmId === "local" || row.querySelector(".security-realm-enabled").checked,
       priority: Number(row.querySelector(".security-realm-priority").value || 0),
       attributes: realm?.attributes || {}
     };
@@ -2759,7 +2758,7 @@ async function loadSecurityAnonymous() {
 function renderSecurityAnonymous() {
   const settings = securityAnonymous || {};
   document.getElementById("security-anonymous-enabled").checked = Boolean(settings.enabled);
-  document.getElementById("security-anonymous-source").value = settings.userSource || "Local";
+  document.getElementById("security-anonymous-source").value = "Local";
   document.getElementById("security-anonymous-user-id").value = settings.userId || "anonymous";
   document.getElementById("security-anonymous-realm-name").value = settings.realmName || "NexusAuthorizingRealm";
 }
@@ -2768,7 +2767,7 @@ async function saveSecurityAnonymous() {
   if (!validateRequiredFields(securityAnonymousRequiredFields)) return;
   const payload = {
     enabled: document.getElementById("security-anonymous-enabled").checked,
-    userSource: document.getElementById("security-anonymous-source").value.trim() || "Local",
+    userSource: "Local",
     userId: document.getElementById("security-anonymous-user-id").value.trim() || "anonymous",
     realmName: document.getElementById("security-anonymous-realm-name").value.trim() || "NexusAuthorizingRealm"
   };

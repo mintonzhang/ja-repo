@@ -35,6 +35,7 @@ import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUiUse
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUserAccount;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUserAccountPassword;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.OidcSettingsCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.RealmCommand;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
@@ -694,7 +695,7 @@ class NexusSecurityRestControllerTest {
   }
 
   @Test
-  void nexusAnonymousSettingsUpdatePersistsSourceMappedFromRealm() {
+  void nexusAnonymousSettingsUpdateKeepsAnonymousSourceLocal() {
     FakeSecurityDao dao = new FakeSecurityDao();
     NexusSecurityRestController controller = controller(dao);
 
@@ -706,9 +707,26 @@ class NexusSecurityRestControllerTest {
     assertEquals("ldap-anonymous", updated.userId());
     assertEquals("LdapRealm", updated.realmName());
     assertEquals(true, record.enabled());
-    assertEquals("LDAP", record.userSource());
+    assertEquals("Local", record.userSource());
     assertEquals("ldap-anonymous", record.userId());
     assertEquals("LdapRealm", record.realmName());
+  }
+
+  @Test
+  void internalRealmUpdateKeepsLocalRealmEnabled() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0,
+        Map.of("source", "Local", "nexusRealm", "NexusAuthenticatingRealm")));
+    dao.realm(new SecurityRealmRecord(2L, "ldap", "LDAP", "LDAP", true, 10,
+        Map.of("source", "LDAP", "nexusRealm", "LdapRealm")));
+    SecurityManagementController controller = new SecurityManagementController(new SecurityManagementService(dao));
+
+    controller.updateRealms(List.of(
+        new RealmCommand("local", "LOCAL", "Local", false, 0, Map.of("source", "Local")),
+        new RealmCommand("ldap", "LDAP", "LDAP", false, 10, Map.of("source", "LDAP"))));
+
+    assertEquals(true, dao.findRealm("local").orElseThrow().enabled());
+    assertEquals(false, dao.findRealm("ldap").orElseThrow().enabled());
   }
 
   @Test

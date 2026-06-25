@@ -170,7 +170,7 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     String realmName = defaultString(config.realmName(), DEFAULT_ANONYMOUS_REALM_NAME);
-    String userSource = defaultString(config.userSource(), sourceForAnonymousRealm(realmName));
+    String userSource = DEFAULT_SOURCE;
     String userId = defaultString(config.userId(), DEFAULT_ANONYMOUS_USER_ID);
     return securityDao.findUser(userSource, userId)
         .filter(this::activeUser)
@@ -804,17 +804,6 @@ public class SecurityAuthenticationService {
       return normalizeSource(realm.realmId());
     }
     return normalizeSource(String.valueOf(source));
-  }
-
-  private static String sourceForAnonymousRealm(String realmName) {
-    String normalized = defaultString(realmName, DEFAULT_ANONYMOUS_REALM_NAME).toLowerCase(Locale.ROOT);
-    if (normalized.contains("ldap")) {
-      return "LDAP";
-    }
-    if (normalized.contains("oidc")) {
-      return "OIDC";
-    }
-    return DEFAULT_SOURCE;
   }
 
   private static String normalizeSource(String source) {
