@@ -394,6 +394,25 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void anonymousAuthenticationAlwaysUsesLocalSource() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.anonymous(new SecurityAnonymousConfigRecord(
+        true,
+        "LDAP",
+        "anonymous",
+        "LdapRealm"));
+    dao.user(user(3L, "Local", "anonymous", null));
+    dao.roles(3L, "nx-anonymous");
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous(false);
+
+    assertTrue(authenticated.isPresent());
+    assertEquals("Local", authenticated.get().source());
+    assertEquals("anonymous", authenticated.get().userId());
+  }
+
+  @Test
   void authenticatesBrowserSessionSubjectBeforeBasicCredentials() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
