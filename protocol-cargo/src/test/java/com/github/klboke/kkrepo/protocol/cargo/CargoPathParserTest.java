@@ -31,6 +31,10 @@ class CargoPathParserTest {
     assertEquals(CargoPath.Kind.YANK, parser.parse("api/v1/crates/cargo/1.2.3/yank").kind());
     assertEquals(CargoPath.Kind.UNYANK, parser.parse("api/v1/crates/cargo/1.2.3/unyank").kind());
 
+    CargoPath owners = parser.parse("api/v1/crates/cargo/owners");
+    assertEquals(CargoPath.Kind.OWNERS, owners.kind());
+    assertEquals("cargo", owners.crateName());
+
     CargoPath nexusDownload = parser.parse("crates/cargo/1.2.3/download");
     assertEquals(CargoPath.Kind.DOWNLOAD, nexusDownload.kind());
     assertEquals("cargo", nexusDownload.crateName());

@@ -72,7 +72,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         ? authenticationService.authenticateCargo(request)
         : authenticationService.authenticate(request);
     if (authenticated.isEmpty()) {
-      authenticated = target.readOnly()
+      authenticated = target.readOnly(repository.get().format())
           ? authenticationService.authenticateAnonymous(anonymousReadEnabled)
           : Optional.empty();
       if (authenticated.isEmpty()) {
@@ -95,7 +95,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       RepositoryRecord repository,
       RepositoryRequest target) {
     AccessDecision lastDenied = AccessDecision.deny("missing permission");
-    for (PermissionAction action : target.actions()) {
+    for (PermissionAction action : target.actions(repository.format())) {
       AccessDecision decision = accessDecisionService.decide(
           subject.permissionSubject(),
           new RepositoryPermission(repository.name(), repository.format(), target.path(), action));
@@ -121,7 +121,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       if (repository == null || repository.isBlank()) {
         return Optional.empty();
       }
-      return Optional.of(new RepositoryRequest(repository.trim(), "", List.of(PermissionAction.EDIT), false));
+      return Optional.of(new RepositoryRequest(repository.trim(), "", method, List.of(PermissionAction.EDIT), false));
     }
     if (uri.startsWith("/service/rest/internal/ui/upload/")) {
       String repository = uri.substring("/service/rest/internal/ui/upload/".length());
@@ -132,7 +132,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       if (repository.isBlank()) {
         return Optional.empty();
       }
-      return Optional.of(new RepositoryRequest(decode(repository), "", List.of(PermissionAction.EDIT), false));
+      return Optional.of(new RepositoryRequest(decode(repository), "", method, List.of(PermissionAction.EDIT), false));
     }
     return Optional.empty();
   }
@@ -151,7 +151,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return Optional.of(new RepositoryRequest(
         decode(repository),
         path,
-        actionsForRepository(method, path),
+        method,
+        null,
         isNpmTokenRoute(method, path)));
   }
 
@@ -169,7 +170,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (repository.isBlank()) {
       return Optional.empty();
     }
-    return Optional.of(new RepositoryRequest(decode(repository), path, List.of(PermissionAction.BROWSE), false));
+    return Optional.of(new RepositoryRequest(decode(repository), path, method, List.of(PermissionAction.BROWSE), false));
   }
 
   private boolean isNpmTokenRoute(String method, String path) {
@@ -178,14 +179,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         || ("DELETE".equals(normalizedMethod) && NpmTokenService.isLogoutPath(path));
   }
 
-  private List<PermissionAction> actionsForRepository(String method, String path) {
-    if (isNpmAuditRoute(method, path)) {
+  private static List<PermissionAction> actionsForRepository(String method, String path, RepositoryFormat format) {
+    if (format == RepositoryFormat.NPM && isNpmAuditRoute(method, path)) {
       return List.of(PermissionAction.READ, PermissionAction.BROWSE);
     }
-    if (isCargoPublishRoute(method, path)) {
+    if (format == RepositoryFormat.CARGO && isCargoPublishRoute(method, path)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
-    if (isCargoYankRoute(method, path)) {
+    if (format == RepositoryFormat.CARGO && isCargoYankRoute(method, path)) {
       return List.of(PermissionAction.EDIT);
     }
     return switch (method.toUpperCase()) {
@@ -197,12 +198,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     };
   }
 
-  private boolean isCargoPublishRoute(String method, String path) {
+  private static boolean isCargoPublishRoute(String method, String path) {
     return "PUT".equalsIgnoreCase(method)
         && "api/v1/crates/new".equals(path);
   }
 
-  private boolean isCargoYankRoute(String method, String path) {
+  private static boolean isCargoYankRoute(String method, String path) {
     if (!path.startsWith("api/v1/crates/")) {
       return false;
     }
@@ -210,12 +211,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         || ("PUT".equalsIgnoreCase(method) && path.endsWith("/unyank"));
   }
 
-  private boolean isNpmAuditRoute(String method, String path) {
+  private static boolean isNpmAuditRoute(String method, String path) {
     return "POST".equalsIgnoreCase(method)
         && isNpmAuditPath(path);
   }
 
-  private boolean isNpmAuditPath(String path) {
+  private static boolean isNpmAuditPath(String path) {
     return "-/npm/v1/security/audits".equals(path)
         || "-/npm/v1/security/audits/quick".equals(path)
         || "-/npm/v1/security/advisories/bulk".equals(path);
@@ -270,10 +271,16 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private record RepositoryRequest(
       String repository,
       String path,
-      List<PermissionAction> actions,
+      String method,
+      List<PermissionAction> fixedActions,
       boolean npmTokenRoute) {
-    private boolean readOnly() {
-      return actions.stream().allMatch(action -> action == PermissionAction.BROWSE || action == PermissionAction.READ);
+    private List<PermissionAction> actions(RepositoryFormat format) {
+      return fixedActions == null ? actionsForRepository(method, path, format) : fixedActions;
+    }
+
+    private boolean readOnly(RepositoryFormat format) {
+      return actions(format).stream()
+          .allMatch(action -> action == PermissionAction.BROWSE || action == PermissionAction.READ);
     }
 
   }

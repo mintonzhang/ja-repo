@@ -291,10 +291,33 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void cargoPermissionOverridesDoNotApplyToNonCargoRepositories() throws Exception {
+    assertRepositoryPathAction(
+        repository("raw-hosted", RepositoryFormat.RAW),
+        "PUT",
+        "/repository/raw-hosted/api/v1/crates/new",
+        PermissionAction.EDIT);
+    assertRepositoryPathAction(
+        repository("raw-hosted", RepositoryFormat.RAW),
+        "DELETE",
+        "/repository/raw-hosted/api/v1/crates/my-crate/1.0.0/yank",
+        PermissionAction.DELETE);
+  }
+
+  @Test
   void npmAuditRoutesUseReadPermission() throws Exception {
     assertNpmAuditRouteUsesReadPermission("-/npm/v1/security/audits");
     assertNpmAuditRouteUsesReadPermission("-/npm/v1/security/audits/quick");
     assertNpmAuditRouteUsesReadPermission("-/npm/v1/security/advisories/bulk");
+  }
+
+  @Test
+  void npmAuditPermissionOverrideDoesNotApplyToNonNpmRepositories() throws Exception {
+    assertRepositoryPathAction(
+        repository("raw-hosted", RepositoryFormat.RAW),
+        "POST",
+        "/repository/raw-hosted/-/npm/v1/security/audits",
+        PermissionAction.ADD);
   }
 
   private void assertNpmAuditRouteUsesReadPermission(String path) throws Exception {
@@ -395,20 +418,29 @@ class RepositorySecurityFilterTest {
   }
 
   private static void assertRepositoryContentAction(String method, PermissionAction action) throws Exception {
+    assertRepositoryPathAction(
+        repository("maven-releases"),
+        method,
+        "/repository/maven-releases/com/acme/app/1.0/app-1.0.jar",
+        action);
+  }
+
+  private static void assertRepositoryPathAction(
+      RepositoryRecord repository,
+      String method,
+      String uri,
+      PermissionAction action) throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
     RepositorySecurityFilter filter = new RepositorySecurityFilter(
         authentication,
         decisions,
-        new FakeRepositoryDao(repository("maven-releases")),
+        new FakeRepositoryDao(repository),
         false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
-    filter.doFilter(
-        request(method, "/repository/maven-releases/com/acme/app/1.0/app-1.0.jar"),
-        response.proxy(),
-        chain);
+    filter.doFilter(request(method, uri), response.proxy(), chain);
 
     assertEquals(1, chain.calls);
     assertEquals(action, decisions.permission.action());

@@ -32,7 +32,7 @@ public final class CargoPathParser {
     String[] parts = Arrays.stream(suffix.split("/"))
         .filter(s -> !s.isBlank())
         .toArray(String[]::new);
-    if (parts.length == 3 && parts[2].equals("owners") && CargoCrateName.isValid(parts[0])) {
+    if (parts.length == 2 && parts[1].equals("owners") && CargoCrateName.isValid(parts[0])) {
       return new CargoPath(CargoPath.Kind.OWNERS, raw, parts[0], null);
     }
     if (parts.length != 3 || !CargoCrateName.isValid(parts[0]) || parts[1].isBlank()) {
