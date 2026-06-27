@@ -16,7 +16,7 @@ Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group
 - Cargo token 认证、匿名/读/写权限、CI token 发布。
 - 面向 Nexus 参考实例的 Cargo 黑盒兼容性测试，以及真实 `cargo` 客户端验证。
 
-第一阶段不支持 Cargo git index 协议、`cargo search` 原生搜索、UI/API 组件上传、crates.io 风格 GitHub owner 邀请、删除已发布 crate version，以及 Nexus Cargo 仓库迁移。Nexus 原生 Cargo 支持也以 sparse protocol 为主，并明确不支持 Cargo 客户端原生搜索和 UI/API 上传组件。
+第一阶段不支持 Cargo git index 协议、`cargo search` 原生搜索、UI/API 组件上传、crates.io 风格 GitHub owner 邀请、删除已发布 crate version，以及 Nexus Cargo 仓库迁移。后续计划补齐 `cargo search` 原生搜索和 kkrepo 自有 UI/API `.crate` 上传能力；Cargo 迁移预研保持待定；Cargo git index、crates.io 风格 GitHub owner 邀请和删除已发布 crate version 明确不实现。Nexus 原生 Cargo 支持也以 sparse protocol 为主，并明确不支持 Cargo 客户端原生搜索和 UI/API 上传组件；kkrepo 后续补齐搜索和上传属于产品增强，不作为 Nexus 兼容要求。
 
 ## 调研基线
 
@@ -41,6 +41,7 @@ Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group
 - Cargo publish 成功后客户端会轮询 index 等待新版本出现。kkrepo hosted publish 应在返回成功前完成 MySQL 版本行和 sparse index 可见状态的事务提交，避免客户端短时间内看不到刚发布的版本。
 - `yank` 不删除 `.crate` 文件，只改变 index JSON 的 `yanked` 字段。已有 `Cargo.lock` 仍应可下载该版本；新解析不应选择 yanked 版本。
 - crate index 文件名是小写，但 index JSON 里的 package name 是大小写敏感字段。为了避免同一 index path 上出现大小写冲突，kkrepo 应在同一仓库内禁止只差大小写的 crate name。
+- `cargo search` 和 kkrepo 自有 UI/API `.crate` 上传属于后续增强项。`cargo search` 应实现 Cargo Registry Web API 的查询语义，并基于 MySQL component/asset 索引返回 Cargo 客户端可解析的 JSON；UI/API 上传必须复用 hosted publish 的校验、checksum、事务写入、权限和审计路径，不能绕过 `cargo publish` 已建立的正确性约束。
 - Cargo 迁移需要重新设计源端读取策略。Nexus Cargo 正式放出时已经处在 H2/PostgreSQL 数据库时代，源端 repository、component、asset、token 和 blob 元数据读取方式可能不再等同于旧 OrientDB 脚本查询。第一阶段只实现协议能力和兼容测试，不承诺迁移 Cargo 仓库数据或 Cargo token。
 
 ## 功能范围
@@ -82,14 +83,22 @@ Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group
    - 使用 Cargo 1.68+ 和当前稳定版 Cargo 验证 `cargo fetch`、`cargo build --locked`、`cargo publish`、`cargo yank`、`cargo yank --undo`。
    - 验证 `.cargo/config.toml` 中 alternate registry 和 source replacement 两种配置，文档中明确二者适用边界。
 
-### 可选加固和非目标
+### 后续计划、待定项和非目标
 
-- Cargo git index protocol 为非目标。后续只有在明确 Nexus 迁移或旧客户端需求出现时再单独设计。
-- `cargo search` 为非目标。管理 UI 和 browse UI 可以提供 kkrepo 自有搜索，但不承诺 Cargo client 原生搜索兼容。
-- UI/API 组件上传为非目标。Cargo 包上传应通过 `cargo publish`，与 Nexus 行为保持一致。
-- owner list/add/remove endpoint 第一阶段可返回未实现或只读最小响应，不作为权限真相。kkrepo 权限以用户、组、角色、仓库权限和 CI token 为准。
-- 已发布 crate version 删除为非目标。即使后续为了合规提供管理员隔离能力，也必须和普通 yank 语义区分。
-- Nexus Cargo 仓库迁移为待定项，第一阶段暂不实现。后续如果启动，需要单独设计 H2/PostgreSQL 源端读取、官方/非公开 API 可用性、token 迁移、blob 校验和切换验证方案。
+后续计划实现：
+
+- `cargo search` 原生搜索。实现 Cargo Registry Web API 的 `GET /api/v1/crates`，基于 MySQL 中可重建的 Cargo component/asset 索引查询，返回 Cargo 客户端可解析的 JSON。该能力是 kkrepo 的产品增强，不要求和 Nexus 对齐，因为 Nexus 明确不支持 Cargo 客户端原生搜索。
+- kkrepo 自有 UI/API `.crate` 上传。该能力只作为管理台/内部 API 的产品增强，不作为 Nexus 兼容能力。实现必须复用 hosted `cargo publish` 的 crate 校验、metadata/index 生成、checksum、MySQL 事务、blob 写入、权限判定、审计和错误语义，避免出现 UI/API 上传和 Cargo 客户端发布两套行为。
+
+待定项：
+
+- Cargo 迁移预研保持待定，第一阶段暂不实现 Nexus Cargo 仓库迁移。后续如果启动，需要先在 Nexus 3.77.0+ 参考实例确认 H2/PostgreSQL 源端读取、官方/非公开 API 可用性、sparse index、blob metadata、token/User Token 存储、权限映射、checksum 校验和切换验证方案。
+
+明确不实现：
+
+- Cargo git index protocol。kkrepo 保持 sparse registry 方向，不维护可被客户端 clone/fetch 的 git index 仓库。
+- crates.io 风格 GitHub owner 邀请。kkrepo 权限真相仍是用户、组、角色、仓库权限和 CI token；owner list/add/remove endpoint 只允许返回未实现或只读最小响应，不能成为权限来源。
+- 删除已发布 crate version。Cargo 包发布物保持不可变，普通撤回能力使用 yank/unyank；如果未来为了合规需要隔离或清理，也必须作为管理员 cleanup/quarantine 能力单独设计，不能暴露成 Cargo 客户端删除已发布版本。
 
 ## URL 与路由设计
 
@@ -376,7 +385,17 @@ Browse UI：
    - Browse UI crate 详情。
    - 指标、日志、告警和文档。
 
-8. 迁移预研，暂不进入第一阶段实现
+8. 后续实现：`cargo search` 原生搜索
+   - 实现 `GET /repository/{repo}/api/v1/crates?q=...`，返回 Cargo Registry Web API 兼容 JSON。
+   - 查询数据来自 MySQL 中可重建的 Cargo component/asset 索引，不引入独立不可恢复搜索状态。
+   - 增加真实 `cargo search --registry <name>` 验证，并覆盖 hosted、proxy 和 group 的结果边界。
+
+9. 后续实现：kkrepo 自有 UI/API `.crate` 上传
+   - 在 Browse/Admin 上传入口支持 Cargo hosted `.crate` 上传，但明确标记为 kkrepo 产品能力，不声明 Nexus 兼容。
+   - 复用 hosted publish 的解析、校验、checksum、index 行生成、事务写入、权限和审计。
+   - 增加 UI/API 上传与 `cargo publish` 产物一致性的测试。
+
+10. 迁移预研，待定且暂不进入第一阶段实现
    - 在 Nexus 3.77.0+ 参考实例确认 Cargo 数据在 H2/PostgreSQL 下的可读入口。
    - 梳理 Cargo token/User Token 的存储和可验证材料。
    - 输出单独的 Cargo 迁移设计后，再决定是否进入实现。
@@ -394,6 +413,12 @@ Browse UI：
 - Proxy 远端 404/410/451、远端 304、checksum mismatch、网络失败都有明确测试。
 - 第一阶段不提供 Nexus Cargo 仓库迁移能力；迁移页面、兼容矩阵和 release note 不能把 Cargo 标记为可迁移。
 - Nexus reference 兼容测试记录所有已知差异，并只在协议允许的位置规范化 host、timestamp 或 header 顺序。
+
+后续增强验收：
+
+- `cargo search --registry <name>` 能通过 kkrepo Cargo hosted/proxy/group 返回 Cargo 客户端可展示的搜索结果；结果来自 MySQL 可重建索引，并有兼容测试覆盖空结果、分页和权限过滤。
+- UI/API `.crate` 上传与 `cargo publish` 共享同一套校验、checksum、metadata/index 写入、权限和审计路径；同一 crate version 通过两种入口发布后的 index 和下载行为一致。
+- Cargo 迁移仍为待定，只有完成 Nexus 3.77.0+ H2/PostgreSQL 源端数据、token、权限和 blob 校验预研后，才能进入单独迁移设计。
 
 ## 参考资料
 

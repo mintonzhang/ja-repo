@@ -16,7 +16,7 @@ First phase support:
 - Cargo token authentication, anonymous/read/write permissions, and CI-token publishing.
 - Cargo black-box compatibility tests against a Nexus reference instance, plus real `cargo` client verification.
 
-The first phase does not support the Cargo git index protocol, native `cargo search`, UI/API component upload, crates.io-style GitHub owner invitations, deletion of published crate versions, or Nexus Cargo repository migration. Nexus native Cargo support is also centered on sparse protocol and explicitly does not support native Cargo client search or UI/API component upload.
+The first phase does not support the Cargo git index protocol, native `cargo search`, UI/API component upload, crates.io-style GitHub owner invitations, deletion of published crate versions, or Nexus Cargo repository migration. Future work should add native `cargo search` and kkrepo-native UI/API `.crate` upload; Cargo migration research remains TBD; Cargo git index, crates.io-style GitHub owner invitations, and deletion of published crate versions are explicit non-goals. Nexus native Cargo support is also centered on sparse protocol and explicitly does not support native Cargo client search or UI/API component upload; kkrepo search and upload support would be product enhancements rather than Nexus compatibility requirements.
 
 ## Research Baseline
 
@@ -41,6 +41,7 @@ Key conclusions:
 - After publish succeeds, Cargo polls the index waiting for the new version to appear. kkrepo hosted publish should commit the MySQL version row and sparse-index visible state before returning success, avoiding short windows where the client cannot see its just-published version.
 - `yank` does not delete the `.crate` file; it only changes the `yanked` field in the index JSON. Existing `Cargo.lock` files should still be able to download the yanked version, while new resolution should not select it.
 - Crate index file names are lowercase, but the package name in index JSON is case-sensitive. To avoid case-only conflicts on the same index path, kkrepo should reject crate names that differ only by case within the same repository.
+- `cargo search` and kkrepo-native UI/API `.crate` upload are follow-up enhancements. `cargo search` should implement Cargo Registry Web API query semantics and return Cargo-client-readable JSON from the MySQL component/asset index. UI/API upload must reuse the hosted publish validation, checksum, transaction write, permission, and audit path; it must not bypass the correctness constraints already established for `cargo publish`.
 - Cargo migration needs a new source-read strategy. Native Cargo became broadly available while Nexus was already in the H2/PostgreSQL database era. Repository, component, asset, token, and blob metadata reads may no longer match older OrientDB script queries. The first phase implements protocol behavior and compatibility tests only; it does not promise Cargo repository data or Cargo token migration.
 
 ## Feature Scope
@@ -82,14 +83,22 @@ Key conclusions:
    - Verify `cargo fetch`, `cargo build --locked`, `cargo publish`, `cargo yank`, and `cargo yank --undo` with Cargo 1.68+ and the current stable Cargo version.
    - Verify both alternate registry and source replacement configurations in `.cargo/config.toml`, and document the boundary between them.
 
-### Optional Hardening And Non-Goals
+### Follow-Up Scope, TBD Items, And Non-Goals
 
-- Cargo git index protocol is a non-goal. Reconsider it only if a concrete Nexus migration or old-client requirement appears.
-- `cargo search` is a non-goal. Admin UI and browse UI may provide kkrepo-native search, but native Cargo client search compatibility is not promised.
-- UI/API component upload is a non-goal. Cargo package upload should use `cargo publish`, matching Nexus behavior.
-- Owner list/add/remove endpoints may return not implemented or minimal read-only responses in the first phase; they are not permission truth. kkrepo permissions are based on users, groups, roles, repository permissions, and CI tokens.
-- Deleting a published crate version is a non-goal. If a future admin quarantine feature is needed for compliance, it must be clearly separated from normal yank semantics.
-- Nexus Cargo repository migration is TBD and is not implemented in the first phase. If started later, it needs a separate design for H2/PostgreSQL source reads, official/non-public API availability, token migration, blob verification, and cutover validation.
+Planned follow-up work:
+
+- Native `cargo search`. Implement Cargo Registry Web API `GET /api/v1/crates`, query the rebuildable Cargo component/asset index in MySQL, and return Cargo-client-readable JSON. This is a kkrepo product enhancement, not a Nexus compatibility requirement, because Nexus explicitly does not support native Cargo client search.
+- kkrepo-native UI/API `.crate` upload. This is only an admin/internal API product enhancement, not Nexus compatibility behavior. The implementation must reuse hosted `cargo publish` crate validation, metadata/index generation, checksum handling, MySQL transactions, blob writes, permission checks, audit, and error semantics so UI/API upload and Cargo client publish do not diverge.
+
+TBD:
+
+- Cargo migration research remains TBD, and Nexus Cargo repository migration is not implemented in the first phase. If this starts later, first confirm H2/PostgreSQL source reads, official/non-public API availability, sparse index data, blob metadata, token/User Token storage, permission mapping, checksum verification, and cutover validation on Nexus 3.77.0+ reference instances.
+
+Explicit non-goals:
+
+- Cargo git index protocol. kkrepo stays on sparse registry and will not maintain a client-cloneable/fetchable git index repository.
+- crates.io-style GitHub owner invitations. kkrepo permission truth remains users, groups, roles, repository permissions, and CI tokens; owner list/add/remove endpoints may only return not implemented or minimal read-only responses and must not become a permission source.
+- Deleting a published crate version. Published Cargo package objects remain immutable, and normal withdrawal uses yank/unyank. If compliance requires quarantine or cleanup later, it must be designed as a separate administrator cleanup/quarantine feature, not as Cargo client deletion of published versions.
 
 ## URL And Routing Design
 
@@ -376,7 +385,17 @@ Log fields should include `repository`, `crate`, `version`, `operation`, `status
    - Browse UI crate details.
    - Metrics, logs, alerts, and docs.
 
-8. Migration research, not part of first-phase implementation
+8. Follow-up implementation: native `cargo search`
+   - Implement `GET /repository/{repo}/api/v1/crates?q=...` with Cargo Registry Web API compatible JSON.
+   - Query the rebuildable Cargo component/asset index in MySQL, without adding independent unrecoverable search state.
+   - Add real `cargo search --registry <name>` verification and cover hosted, proxy, and group result boundaries.
+
+9. Follow-up implementation: kkrepo-native UI/API `.crate` upload
+   - Support Cargo hosted `.crate` upload from Browse/Admin upload entrypoints, clearly marked as kkrepo product behavior rather than Nexus compatibility.
+   - Reuse hosted publish parsing, validation, checksum, index-line generation, transactional writes, permissions, and audit.
+   - Add tests proving UI/API upload and `cargo publish` produce equivalent artifacts.
+
+10. Migration research, TBD and not part of first-phase implementation
    - Confirm Cargo data readable entrypoints on Nexus 3.77.0+ reference instances with H2/PostgreSQL.
    - Map Cargo token/User Token storage and verifiable material.
    - Produce a separate Cargo migration design before deciding whether to implement.
@@ -394,6 +413,12 @@ The first phase is complete only when:
 - Proxy remote `404/410/451`, remote `304`, checksum mismatch, and network failure all have explicit tests.
 - The first phase does not provide Nexus Cargo repository migration. Migration pages, compatibility matrices, and release notes must not mark Cargo as migratable.
 - Nexus reference compatibility tests record all known differences, and only normalize host, timestamp, or header ordering when the protocol allows it.
+
+Follow-up enhancement acceptance:
+
+- `cargo search --registry <name>` returns Cargo-client-displayable search results through kkrepo Cargo hosted/proxy/group repositories; results come from a rebuildable MySQL index and compatibility tests cover empty results, pagination, and permission filtering.
+- UI/API `.crate` upload shares the same validation, checksum, metadata/index write, permission, and audit path as `cargo publish`; publishing the same crate version through either entrypoint produces equivalent index and download behavior.
+- Cargo migration remains TBD. It may move into a separate migration design only after Nexus 3.77.0+ H2/PostgreSQL source data, token, permission, and blob verification research is complete.
 
 ## References
 
