@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,13 +33,14 @@ public class CargoGroupService {
       RepositoryRuntime runtime,
       CargoPath path,
       String baseUrl,
+      CargoSearchQuery search,
       boolean headOnly) {
     ensureGroup(runtime);
     return switch (path.kind()) {
       case ROOT, CONFIG -> config(runtime, baseUrl, headOnly);
       case INDEX -> index(runtime, path.crateName(), headOnly);
       case DOWNLOAD -> download(runtime, path.crateName(), path.version(), headOnly);
-      case SEARCH -> CargoResponses.unsupportedSearch(objectMapper, headOnly);
+      case SEARCH -> search(runtime, search, headOnly);
       case OWNERS -> CargoResponses.json(objectMapper, Map.of("users", List.of()), 200, headOnly);
       default -> throw new CargoExceptions.CargoNotFoundException(path.rawPath());
     };
@@ -104,6 +106,35 @@ public class CargoGroupService {
       throw lastUpstream;
     }
     throw new CargoExceptions.CargoNotFoundException(crateName + " " + version);
+  }
+
+  MavenResponse search(RepositoryRuntime runtime, CargoSearchQuery query, boolean headOnly) {
+    List<Map<String, Object>> crates = new ArrayList<>();
+    CargoExceptions.BadUpstreamException lastUpstream = null;
+    CargoSearchQuery memberQuery = new CargoSearchQuery(
+        query.query(),
+        Math.min(CargoSearchQuery.MAX_PER_PAGE, query.offset() + query.perPage()),
+        1);
+    for (RepositoryRuntime member : runtime.members()) {
+      if (!eligible(member)) {
+        continue;
+      }
+      try {
+        MavenResponse response = switch (member.type()) {
+          case HOSTED -> hosted.search(member, memberQuery, false);
+          case PROXY -> proxy.search(member, memberQuery, false);
+          case GROUP -> throw new CargoExceptions.MethodNotAllowed(
+              "Nested Cargo group repositories are not supported: " + member.name());
+        };
+        crates.addAll(CargoSearchResults.cratesFromResponse(objectMapper, response));
+      } catch (CargoExceptions.BadUpstreamException e) {
+        lastUpstream = e;
+      }
+    }
+    if (crates.isEmpty() && lastUpstream != null) {
+      throw lastUpstream;
+    }
+    return CargoSearchResults.fromCrates(objectMapper, crates, query, headOnly);
   }
 
   private MavenResponse config(RepositoryRuntime runtime, String baseUrl, boolean headOnly) {

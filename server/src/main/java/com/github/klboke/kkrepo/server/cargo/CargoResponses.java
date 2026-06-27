@@ -36,7 +36,7 @@ public final class CargoResponses {
     return json(bytes, status, etag, lastModified, headOnly);
   }
 
-  private static MavenResponse json(
+  static MavenResponse json(
       byte[] bytes, int status, String etag, Instant lastModified, boolean headOnly) {
     if (headOnly) {
       return MavenResponse.noBody(status, bytes.length, "application/json", etag, lastModified);

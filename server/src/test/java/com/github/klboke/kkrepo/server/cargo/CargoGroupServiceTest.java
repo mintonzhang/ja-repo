@@ -28,6 +28,7 @@ class CargoGroupServiceTest {
         runtime(),
         new CargoPath(CargoPath.Kind.CONFIG, "config.json", null, null),
         "http://localhost/repository/cargo-group",
+        new CargoSearchQuery("", 10, 1),
         false);
 
     Map<String, Object> config = mapper.readValue(
@@ -58,6 +59,31 @@ class CargoGroupServiceTest {
 
     MavenResponse download = service.download(group, "demo", "1.0.0", false);
     assertEquals("hosted-crate", new String(download.body().readAllBytes(), StandardCharsets.UTF_8));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void groupSearchMergesMembersAndKeepsFirstDuplicateCrate() throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    StubCargoHostedService hosted = new StubCargoHostedService("", "", """
+        {"crates":[{"name":"demo","max_version":"1.0.0","description":"hosted demo"}],"meta":{"total":1}}
+        """);
+    StubCargoProxyService proxy = new StubCargoProxyService("", "", """
+        {"crates":[{"name":"demo","max_version":"1.1.0","description":"proxy demo"},{"name":"itoa","max_version":"1.0.15","description":"fast"}],"meta":{"total":2}}
+        """);
+    CargoGroupService service = new CargoGroupService(hosted, proxy, mapper);
+
+    MavenResponse response = service.search(runtime(hostedRuntime(), proxyRuntime()), new CargoSearchQuery("demo", 10, 1), false);
+
+    Map<String, Object> body = mapper.readValue(
+        new String(response.body().readAllBytes(), StandardCharsets.UTF_8),
+        JSON_MAP);
+    List<Map<String, Object>> crates = (List<Map<String, Object>>) body.get("crates");
+    assertEquals(2, crates.size());
+    assertEquals("demo", crates.get(0).get("name"));
+    assertEquals("1.0.0", crates.get(0).get("max_version"));
+    assertEquals("itoa", crates.get(1).get("name"));
+    assertEquals(Map.of("total", 2), body.get("meta"));
   }
 
   private static RepositoryRuntime runtime() {
@@ -124,11 +150,17 @@ class CargoGroupServiceTest {
   private static final class StubCargoHostedService extends CargoHostedService {
     private final String indexBody;
     private final String downloadBody;
+    private final String searchBody;
 
     private StubCargoHostedService(String indexBody, String downloadBody) {
+      this(indexBody, downloadBody, "{\"crates\":[],\"meta\":{\"total\":0}}");
+    }
+
+    private StubCargoHostedService(String indexBody, String downloadBody, String searchBody) {
       super(null, null, null, null, null, null, new ObjectMapper());
       this.indexBody = indexBody;
       this.downloadBody = downloadBody;
+      this.searchBody = searchBody;
     }
 
     @Override
@@ -141,17 +173,29 @@ class CargoGroupServiceTest {
     MavenResponse download(RepositoryRuntime runtime, String crateName, String version, boolean headOnly) {
       byte[] bytes = downloadBody.getBytes(StandardCharsets.UTF_8);
       return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/x-tar", null, null);
+    }
+
+    @Override
+    MavenResponse search(RepositoryRuntime runtime, CargoSearchQuery query, boolean headOnly) {
+      byte[] bytes = searchBody.getBytes(StandardCharsets.UTF_8);
+      return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/json", null, null);
     }
   }
 
   private static final class StubCargoProxyService extends CargoProxyService {
     private final String indexBody;
     private final String downloadBody;
+    private final String searchBody;
 
     private StubCargoProxyService(String indexBody, String downloadBody) {
-      super(null, null, null, null, null, null, null, null, new ObjectMapper());
+      this(indexBody, downloadBody, "{\"crates\":[],\"meta\":{\"total\":0}}");
+    }
+
+    private StubCargoProxyService(String indexBody, String downloadBody, String searchBody) {
+      super(null, null, null, null, null, null, null, null, null, new ObjectMapper());
       this.indexBody = indexBody;
       this.downloadBody = downloadBody;
+      this.searchBody = searchBody;
     }
 
     @Override
@@ -164,6 +208,12 @@ class CargoGroupServiceTest {
     MavenResponse download(RepositoryRuntime runtime, String crateName, String version, boolean headOnly) {
       byte[] bytes = downloadBody.getBytes(StandardCharsets.UTF_8);
       return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/x-tar", null, null);
+    }
+
+    @Override
+    MavenResponse search(RepositoryRuntime runtime, CargoSearchQuery query, boolean headOnly) {
+      byte[] bytes = searchBody.getBytes(StandardCharsets.UTF_8);
+      return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/json", null, null);
     }
   }
 }

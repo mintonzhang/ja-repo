@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
+import com.github.klboke.kkrepo.server.cargo.CargoSearchQuery;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -195,7 +196,12 @@ class RepositoryContentControllerConditionalTest {
     }
 
     @Override
-    public MavenResponse get(RepositoryRuntime runtime, CargoPath path, String baseUrl, boolean headOnly) {
+    public MavenResponse get(
+        RepositoryRuntime runtime,
+        CargoPath path,
+        String baseUrl,
+        CargoSearchQuery search,
+        boolean headOnly) {
       byte[] bytes = "{\"dl\":\"http://localhost/repository/cargo/api/v1/crates\"}"
           .getBytes(StandardCharsets.UTF_8);
       if (headOnly) {

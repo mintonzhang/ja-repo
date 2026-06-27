@@ -186,6 +186,14 @@ public class ComponentDao {
   }
 
   public List<ComponentSearchRow> searchByRepositoryIds(List<Long> repositoryIds, String keyword, int limit) {
+    return searchByRepositoryIds(repositoryIds, RepositoryFormat.NPM, keyword, limit);
+  }
+
+  public List<ComponentSearchRow> searchByRepositoryIds(
+      List<Long> repositoryIds,
+      RepositoryFormat format,
+      String keyword,
+      int limit) {
     if (repositoryIds == null || repositoryIds.isEmpty()) {
       return List.of();
     }
@@ -193,7 +201,7 @@ public class ComponentDao {
     int safeLimit = Math.max(1, Math.min(limit, 300));
     String placeholders = String.join(",", Collections.nCopies(repositoryIds.size(), "?"));
     List<Object> args = new ArrayList<>(repositoryIds);
-    args.add(EnumColumns.write(RepositoryFormat.NPM));
+    args.add(EnumColumns.write(format));
     StringBuilder sql = new StringBuilder("""
         SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
                c.name, c.version, c.kind, c.last_updated_at
@@ -221,6 +229,46 @@ public class ComponentDao {
         """);
     args.add(safeLimit);
     return jdbcTemplate.query(sql.toString(), searchRowMapper, args.toArray());
+  }
+
+  public List<ComponentRecord> searchComponentsByRepositoryIds(
+      List<Long> repositoryIds,
+      RepositoryFormat format,
+      String keyword,
+      int limit) {
+    if (repositoryIds == null || repositoryIds.isEmpty()) {
+      return List.of();
+    }
+    String normalized = keyword == null ? "" : keyword.trim();
+    int safeLimit = Math.max(1, Math.min(limit, 300));
+    String placeholders = String.join(",", Collections.nCopies(repositoryIds.size(), "?"));
+    List<Object> args = new ArrayList<>(repositoryIds);
+    args.add(EnumColumns.write(format));
+    StringBuilder sql = new StringBuilder("""
+        SELECT c.*
+        FROM component c
+        WHERE c.repository_id IN (
+        """);
+    sql.append(placeholders).append(") AND c.format = ?");
+    if (!normalized.isEmpty()) {
+      String booleanQuery = fulltextBooleanQuery(normalized);
+      if (booleanQuery.isBlank()) return List.of();
+      int fromIndex = sql.indexOf("FROM component c");
+      sql.replace(fromIndex, fromIndex + "FROM component c".length(), """
+          FROM component_search cs
+          JOIN component c ON c.id = cs.component_id""");
+      sql.append("""
+          AND MATCH(cs.namespace, cs.name, cs.version, cs.keywords)
+              AGAINST (? IN BOOLEAN MODE)
+          """);
+      args.add(booleanQuery);
+    }
+    sql.append("""
+        ORDER BY c.last_updated_at DESC, c.namespace, c.name, c.version
+        LIMIT ?
+        """);
+    args.add(safeLimit);
+    return jdbcTemplate.query(sql.toString(), rowMapper, args.toArray());
   }
 
   public int deleteIfNoAssets(long componentId) {

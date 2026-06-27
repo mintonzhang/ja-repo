@@ -136,6 +136,9 @@ class CargoAssetWriter {
     if (metadata.description() != null) {
       assetAttrs.put("description", metadata.description());
     }
+    putText(assetAttrs, "homepage", metadata.publishJson().get("homepage"));
+    putText(assetAttrs, "documentation", metadata.publishJson().get("documentation"));
+    putText(assetAttrs, "repository", metadata.publishJson().get("repository"));
     return write(runtime, storage, blobStoreId, path, body, contentType, "crate",
         new CargoCoordinate(metadata, indexEntry), assetAttrs, remoteAttributes,
         createdBy, createdByIp, keepResponseFile, allowReplace, expectedSha256);
@@ -563,8 +566,21 @@ class CargoAssetWriter {
       if (metadata.description() != null) {
         attrs.put("description", metadata.description());
       }
+      putText(attrs, "homepage", metadata.publishJson().get("homepage"));
+      putText(attrs, "documentation", metadata.publishJson().get("documentation"));
+      putText(attrs, "repository", metadata.publishJson().get("repository"));
       attrs.put("indexEntry", entry);
       return attrs;
+    }
+  }
+
+  private static void putText(Map<String, Object> target, String key, Object value) {
+    if (value == null) {
+      return;
+    }
+    String text = String.valueOf(value).trim();
+    if (!text.isBlank()) {
+      target.put(key, text);
     }
   }
 }

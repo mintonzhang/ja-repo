@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoGroupService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.cargo.CargoProxyService;
+import com.github.klboke.kkrepo.server.cargo.CargoSearchQuery;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -179,7 +180,8 @@ public class RepositoryContentController {
     }
     if (runtime.format() == RepositoryFormat.CARGO) {
       CargoPath path = cargoParser.parse(extractRepositoryPath(name, request, true));
-      MavenResponse resp = dispatchCargoGet(runtime, path, repositoryBaseUrl(request, runtime.name()), true);
+      MavenResponse resp = dispatchCargoGet(
+          runtime, path, repositoryBaseUrl(request, runtime.name()), cargoSearchQuery(request), true);
       return toHeadResponse(resp, request);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
@@ -472,7 +474,8 @@ public class RepositoryContentController {
     }
     if (runtime.format() == RepositoryFormat.CARGO) {
       CargoPath path = cargoParser.parse(extractRepositoryPath(name, request, true));
-      MavenResponse resp = dispatchCargoGet(runtime, path, repositoryBaseUrl(request, runtime.name()), headOnly);
+      MavenResponse resp = dispatchCargoGet(
+          runtime, path, repositoryBaseUrl(request, runtime.name()), cargoSearchQuery(request), headOnly);
       return toStreamingResponse(resp, request, false);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
@@ -620,11 +623,12 @@ public class RepositoryContentController {
       RepositoryRuntime runtime,
       CargoPath path,
       String baseUrl,
+      CargoSearchQuery search,
       boolean headOnly) {
     return switch (runtime.type()) {
-      case HOSTED -> cargoHosted.get(runtime, path, baseUrl, headOnly);
-      case PROXY -> cargoProxy.get(runtime, path, baseUrl, headOnly);
-      case GROUP -> cargoGroup.get(runtime, path, baseUrl, headOnly);
+      case HOSTED -> cargoHosted.get(runtime, path, baseUrl, search, headOnly);
+      case PROXY -> cargoProxy.get(runtime, path, baseUrl, search, headOnly);
+      case GROUP -> cargoGroup.get(runtime, path, baseUrl, search, headOnly);
     };
   }
 
@@ -893,6 +897,14 @@ public class RepositoryContentController {
     } catch (NumberFormatException e) {
       return fallback;
     }
+  }
+
+  private static CargoSearchQuery cargoSearchQuery(HttpServletRequest request) {
+    int perPage = Math.min(
+        parsePositiveInt(request.getParameter("per_page"), CargoSearchQuery.DEFAULT_PER_PAGE),
+        CargoSearchQuery.MAX_PER_PAGE);
+    int page = parsePositiveInt(request.getParameter("page"), 1);
+    return new CargoSearchQuery(request.getParameter("q"), perPage, page);
   }
 
   private static String escapeHtml(String s) {

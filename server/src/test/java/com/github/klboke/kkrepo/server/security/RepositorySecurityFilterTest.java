@@ -95,6 +95,11 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void cargoSearchUsesAnonymousReadPermissionsWhenAvailable() throws Exception {
+    assertCargoReadUsesAnonymousPermissions("/repository/cargo-hosted/api/v1/crates");
+  }
+
+  @Test
   void cargoConfigRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
     assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/config.json");
   }
@@ -102,6 +107,11 @@ class RepositorySecurityFilterTest {
   @Test
   void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
     assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/kk/re/kkrepo_e2e");
+  }
+
+  @Test
+  void cargoSearchRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
+    assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/api/v1/crates");
   }
 
   private static void assertCargoReadUsesAnonymousPermissions(String uri) throws Exception {

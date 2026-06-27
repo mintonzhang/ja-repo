@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
+import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.cargo.CargoCrateName;
 import com.github.klboke.kkrepo.protocol.cargo.CargoIndexPath;
 import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
@@ -22,6 +24,7 @@ import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.IOException;
+import java.net.URLEncoder;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -39,6 +42,7 @@ public class CargoProxyService {
   };
 
   private final AssetDao assetDao;
+  private final ComponentDao componentDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final CargoAssetWriter writer;
   private final CargoAssetReader reader;
@@ -50,6 +54,7 @@ public class CargoProxyService {
 
   public CargoProxyService(
       AssetDao assetDao,
+      ComponentDao componentDao,
       BlobStorageRegistry blobStorageRegistry,
       CargoAssetWriter writer,
       CargoAssetReader reader,
@@ -59,6 +64,7 @@ public class CargoProxyService {
       AssetMetadataCache assetMetadataCache,
       ObjectMapper objectMapper) {
     this.assetDao = assetDao;
+    this.componentDao = componentDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
     this.reader = reader;
@@ -73,13 +79,14 @@ public class CargoProxyService {
       RepositoryRuntime runtime,
       CargoPath path,
       String baseUrl,
+      CargoSearchQuery search,
       boolean headOnly) {
     ensureProxy(runtime);
     return switch (path.kind()) {
       case ROOT, CONFIG -> localConfig(runtime, baseUrl, headOnly);
       case INDEX -> index(runtime, path.crateName(), headOnly);
       case DOWNLOAD -> download(runtime, path.crateName(), path.version(), headOnly);
-      case SEARCH -> CargoResponses.unsupportedSearch(objectMapper, headOnly);
+      case SEARCH -> search(runtime, search, headOnly);
       case OWNERS -> CargoResponses.json(objectMapper, Map.of("users", List.of()), 200, headOnly);
       default -> throw new CargoExceptions.CargoNotFoundException(path.rawPath());
     };
@@ -155,6 +162,45 @@ public class CargoProxyService {
     }
   }
 
+  MavenResponse search(RepositoryRuntime runtime, CargoSearchQuery query, boolean headOnly) {
+    ensureProxy(runtime);
+    Instant now = Instant.now();
+    if (proxyStateDao != null && proxyStateDao.isBlocked(runtime.id(), now)) {
+      return localSearch(runtime, query, headOnly);
+    }
+    CargoRemoteConfig config;
+    try {
+      config = remoteConfig(runtime, now);
+    } catch (CargoExceptions.BadUpstreamException e) {
+      return searchFallback(runtime, query, headOnly, e.getMessage(), now);
+    }
+    if (config.api() == null) {
+      return localSearch(runtime, query, headOnly);
+    }
+    String url = RemoteUrlBuilder.repositoryPathWithQueryString(
+        config.api(),
+        "api/v1/crates",
+        searchQuery(query));
+    HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(url, null, null, null, false)
+        .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.SEARCH)
+        .withRepository(runtime);
+    try {
+      return fetcher.fetchWithBodyRetry(req, "api/v1/crates", result -> {
+        int status = result.status();
+        if (status >= 200 && status < 300) {
+          byte[] body = UpstreamBodyReadException.readAllBytes(result.body());
+          if (proxyStateDao != null) {
+            proxyStateDao.recordSuccess(runtime.id(), now);
+          }
+          return CargoResponses.json(body, 200, null, null, headOnly);
+        }
+        return searchFallback(runtime, query, headOnly, "Upstream search returned " + status, now);
+      });
+    } catch (IOException e) {
+      return searchFallback(runtime, query, headOnly, "Upstream search IO error: " + e.getMessage(), now);
+    }
+  }
+
   private MavenResponse fetchAndCacheIndex(
       RepositoryRuntime runtime,
       String path,
@@ -213,6 +259,45 @@ public class CargoProxyService {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
     }
+  }
+
+  private MavenResponse localSearch(RepositoryRuntime runtime, CargoSearchQuery query, boolean headOnly) {
+    List<ComponentRecord> components = componentDao == null
+        ? List.of()
+        : componentDao.searchComponentsByRepositoryIds(
+            List.of(runtime.id()),
+            RepositoryFormat.CARGO,
+            query.query(),
+            query.localScanLimit());
+    return CargoSearchResults.fromComponents(objectMapper, components, query, headOnly);
+  }
+
+  private MavenResponse searchFallback(
+      RepositoryRuntime runtime,
+      CargoSearchQuery query,
+      boolean headOnly,
+      String error,
+      Instant now) {
+    if (proxyStateDao != null) {
+      int failCount = proxyStateDao.loadState(runtime.id())
+          .map(ProxyStateDao.ProxyRemoteState::failCount)
+          .orElse(0);
+      long block = runtime.autoBlockOrDefault()
+          ? BACKOFF_SECONDS[Math.min(failCount, BACKOFF_SECONDS.length - 1)]
+          : 0;
+      proxyStateDao.recordFailure(runtime.id(), block, error, now);
+    }
+    return localSearch(runtime, query, headOnly);
+  }
+
+  private String searchQuery(CargoSearchQuery query) {
+    StringBuilder value = new StringBuilder();
+    value.append("q=").append(urlEncode(query.query()));
+    value.append("&per_page=").append(query.perPage());
+    if (query.page() > 1) {
+      value.append("&page=").append(query.page());
+    }
+    return value.toString();
   }
 
   private MavenResponse fetchAndCacheCrate(
@@ -512,6 +597,10 @@ public class CargoProxyService {
 
   private static String contentType(String value, String fallback) {
     return value == null || value.isBlank() ? fallback : value;
+  }
+
+  private static String urlEncode(String value) {
+    return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
   }
 
   private BlobStorage blobStorage(RepositoryRuntime runtime) {

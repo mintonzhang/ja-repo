@@ -20,6 +20,8 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,13 +60,14 @@ public class CargoHostedService {
       RepositoryRuntime runtime,
       CargoPath path,
       String baseUrl,
+      CargoSearchQuery search,
       boolean headOnly) {
     ensureHosted(runtime);
     return switch (path.kind()) {
       case ROOT, CONFIG -> config(runtime, baseUrl, headOnly);
       case INDEX -> index(runtime, path.crateName(), headOnly);
       case DOWNLOAD -> download(runtime, path.crateName(), path.version(), headOnly);
-      case SEARCH -> CargoResponses.unsupportedSearch(objectMapper, headOnly);
+      case SEARCH -> search(runtime, search, headOnly);
       case OWNERS -> CargoResponses.json(objectMapper, Map.of("users", List.of()), 200, headOnly);
       default -> throw new CargoExceptions.CargoNotFoundException(path.rawPath());
     };
@@ -99,6 +102,39 @@ public class CargoHostedService {
     }
   }
 
+  public String uploadCrate(
+      RepositoryRuntime runtime,
+      InputStream body,
+      String createdBy,
+      String createdByIp) {
+    ensureHosted(runtime);
+    enforcePublishPolicy(runtime);
+    Path tmp = null;
+    try {
+      tmp = Files.createTempFile("kkrepo-cargo-upload-", ".crate");
+      Files.copy(body, tmp, StandardCopyOption.REPLACE_EXISTING);
+      CargoPackageMetadata metadata = CargoPackageMetadata.fromManifest(CargoCrateInspector.inspect(tmp));
+      if (componentDao.findByNameAndVersion(runtime.id(), metadata.normalizedName(), metadata.versionKey()).isPresent()) {
+        throw new CargoExceptions.WritePolicyDenied(
+            "Cargo crate version already exists: " + metadata.name() + " " + metadata.version());
+      }
+      CargoAssetWriter.Stored stored = writer.writeHostedCrate(
+          runtime,
+          blobStorage(runtime),
+          requireBlobStore(runtime),
+          metadata,
+          tmp,
+          createdBy,
+          createdByIp);
+      stored.discardBody();
+      return stored.asset().path();
+    } catch (IOException e) {
+      throw new CargoExceptions.BadRequestException("Invalid .crate upload", e);
+    } finally {
+      com.github.klboke.kkrepo.server.blob.TempBlobFiles.deleteQuietly(tmp);
+    }
+  }
+
   public MavenResponse yank(RepositoryRuntime runtime, String crateName, String version, boolean yanked) {
     ensureHosted(runtime);
     ComponentRecord component = component(runtime, crateName, version)
@@ -127,6 +163,15 @@ public class CargoHostedService {
       }
     }
     return CargoResponses.text(body.toString(), null, latestUpdatedAt(components), headOnly);
+  }
+
+  MavenResponse search(RepositoryRuntime runtime, CargoSearchQuery query, boolean headOnly) {
+    List<ComponentRecord> components = componentDao.searchComponentsByRepositoryIds(
+        List.of(runtime.id()),
+        RepositoryFormat.CARGO,
+        query.query(),
+        query.localScanLimit());
+    return CargoSearchResults.fromComponents(objectMapper, components, query, headOnly);
   }
 
   MavenResponse download(RepositoryRuntime runtime, String crateName, String version, boolean headOnly) {

@@ -69,6 +69,54 @@ class CargoPublishPayloadTest {
     assertEquals("Cargo.toml package identity does not match publish metadata", thrown.getMessage());
   }
 
+  @Test
+  @SuppressWarnings("unchecked")
+  void crateInspectorBuildsPublishMetadataForUiUpload() throws Exception {
+    byte[] crate = crateArchiveWithManifest("ui_demo", "0.1.0", """
+        [package]
+        name = "ui_demo"
+        version = "0.1.0"
+        description = "Uploaded from UI"
+        repository = "https://example.test/ui_demo"
+        keywords = ["cargo", "ui"]
+
+        [dependencies]
+        serde = { version = "1", features = ["derive"], optional = true, default-features = false }
+        tokio = "1"
+
+        [dev-dependencies]
+        tempfile = "3"
+
+        [target.'cfg(unix)'.dependencies]
+        libc = "0.2"
+
+        [features]
+        default = ["serde"]
+        """);
+    Path archive = Files.createTempFile("kkrepo-cargo-test-", ".crate");
+    Files.write(archive, crate);
+    try {
+      CargoPublishPayload.CargoPackageMetadata metadata =
+          CargoPublishPayload.CargoPackageMetadata.fromManifest(CargoCrateInspector.inspect(archive));
+      Map<String, Object> entry = metadata.indexEntry("abc123", false);
+
+      assertEquals("ui_demo", entry.get("name"));
+      assertEquals("0.1.0", entry.get("vers"));
+      assertEquals("Uploaded from UI", metadata.description());
+      assertEquals("https://example.test/ui_demo", metadata.publishJson().get("repository"));
+      assertEquals(Map.of("default", List.of("serde")), entry.get("features"));
+      List<Map<String, Object>> deps = (List<Map<String, Object>>) entry.get("deps");
+      assertEquals(4, deps.size());
+      assertEquals("serde", deps.get(0).get("name"));
+      assertEquals(false, deps.get(0).get("default_features"));
+      assertEquals(true, deps.get(0).get("optional"));
+      assertEquals("dev", deps.get(2).get("kind"));
+      assertEquals("cfg(unix)", deps.get(3).get("target"));
+    } finally {
+      Files.deleteIfExists(archive);
+    }
+  }
+
   private static Map<String, Object> publishMetadata(String name, String version) {
     Map<String, Object> dependency = new LinkedHashMap<>();
     dependency.put("name", "serde");
@@ -98,10 +146,15 @@ class CargoPublishPayloadTest {
   }
 
   private static byte[] crateArchive(String name, String version) throws IOException {
-    String dir = name + "-" + version + "/";
-    byte[] manifest = ("[package]\n"
+    String manifest = "[package]\n"
         + "name = \"" + name + "\"\n"
-        + "version = \"" + version + "\"\n").getBytes(StandardCharsets.UTF_8);
+        + "version = \"" + version + "\"\n";
+    return crateArchiveWithManifest(name, version, manifest);
+  }
+
+  private static byte[] crateArchiveWithManifest(String name, String version, String manifestText) throws IOException {
+    String dir = name + "-" + version + "/";
+    byte[] manifest = manifestText.getBytes(StandardCharsets.UTF_8);
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (GzipCompressorOutputStream gzip = new GzipCompressorOutputStream(bytes);
         TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {

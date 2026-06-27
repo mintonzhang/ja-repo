@@ -133,6 +133,10 @@ final class CargoPublishPayload implements AutoCloseable {
           new LinkedHashMap<>(json));
     }
 
+    static CargoPackageMetadata fromManifest(CargoCrateInspector.Manifest manifest) {
+      return fromPublishJson(manifest.publishJson());
+    }
+
     Map<String, Object> indexEntry(String checksum, boolean yanked) {
       Map<String, Object> entry = new LinkedHashMap<>();
       entry.put("name", name);

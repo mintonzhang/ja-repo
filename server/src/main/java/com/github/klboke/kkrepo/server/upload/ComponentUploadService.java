@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
+import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
@@ -50,6 +51,7 @@ public class ComponentUploadService {
       singleAsset("npm"),
       singleAsset("pypi"),
       singleAsset("helm"),
+      singleAsset("cargo"),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -61,6 +63,7 @@ public class ComponentUploadService {
   private final NpmHostedService npmHosted;
   private final PypiHostedService pypiHosted;
   private final HelmHostedService helmHosted;
+  private final CargoHostedService cargoHosted;
   private final RawHostedService rawHosted;
   private final YumService yumService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
@@ -72,6 +75,7 @@ public class ComponentUploadService {
       NpmHostedService npmHosted,
       PypiHostedService pypiHosted,
       HelmHostedService helmHosted,
+      CargoHostedService cargoHosted,
       RawHostedService rawHosted,
       YumService yumService) {
     this.registry = registry;
@@ -80,6 +84,7 @@ public class ComponentUploadService {
     this.npmHosted = npmHosted;
     this.pypiHosted = pypiHosted;
     this.helmHosted = helmHosted;
+    this.cargoHosted = cargoHosted;
     this.rawHosted = rawHosted;
     this.yumService = yumService;
   }
@@ -118,7 +123,7 @@ public class ComponentUploadService {
       case PYPI -> uploadPypi(runtime, upload, createdBy, createdByIp);
       case HELM -> uploadHelm(runtime, upload, createdBy, createdByIp);
       case GO -> throw new UploadValidationException("Go hosted upload is not supported");
-      case CARGO -> throw new UploadValidationException("Cargo hosted upload must use the Cargo Web API");
+      case CARGO -> uploadCargo(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -208,6 +213,21 @@ public class ComponentUploadService {
     AssetUpload asset = singleAsset(upload, "Helm");
     helmHosted.push(runtime, asset.file(), createdBy, createdByIp);
     return List.of(originalFilename(asset.file()));
+  }
+
+  private List<String> uploadCargo(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    AssetUpload asset = singleAsset(upload, "Cargo");
+    String filename = originalFilename(asset.file());
+    if (!filename.endsWith(".crate")) {
+      throw new UploadValidationException("Cargo upload requires a .crate asset");
+    }
+    try (var input = asset.file().getInputStream()) {
+      return List.of(cargoHosted.uploadCrate(runtime, input, createdBy, createdByIp));
+    }
   }
 
   private List<String> uploadRaw(
