@@ -132,6 +132,7 @@ const securityTransfers = {
 let toastTimer;
 const BROWSE_WELCOME = "/browse/#browse/welcome";
 const AUTH_SNAPSHOT_KEY = "nexusPlus.authSnapshot";
+const SIDE_GROUP_STATE_KEY = "kkrepo.admin.sideGroups";
 
 function applyOriginAwarePlaceholders() {
   const oidcRedirectUri = document.getElementById("security-oidc-redirect-uri");
@@ -316,6 +317,79 @@ function normalizeAdminHash(hash) {
 
 function viewFromHash(hash = window.location.hash) {
   return hashViewRoutes[normalizeAdminHash(hash)] || null;
+}
+
+function readSideGroupState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SIDE_GROUP_STATE_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSideGroupState(state) {
+  try {
+    localStorage.setItem(SIDE_GROUP_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // localStorage can be unavailable in private or constrained browser contexts.
+  }
+}
+
+function sideGroupButton(groupName) {
+  return Array.from(document.querySelectorAll(".side-group[data-side-group]"))
+    .find((button) => button.dataset.sideGroup === groupName) || null;
+}
+
+function sideGroupItems(groupName) {
+  return Array.from(document.querySelectorAll(".side-group-items[data-side-group-items]"))
+    .find((items) => items.dataset.sideGroupItems === groupName) || null;
+}
+
+function setSideGroupOpen(button, open, persist = false) {
+  const groupName = button?.dataset.sideGroup;
+  if (!groupName) return;
+  const items = sideGroupItems(groupName);
+  button.classList.toggle("is-open", open);
+  button.setAttribute("aria-expanded", String(open));
+  if (items) {
+    items.hidden = !open;
+  }
+  if (persist) {
+    const state = readSideGroupState();
+    state[groupName] = open;
+    writeSideGroupState(state);
+  }
+}
+
+function sideGroupForView(view) {
+  const item = Array.from(document.querySelectorAll(".side-item[data-view]"))
+    .find((candidate) => candidate.dataset.view === view);
+  return item?.closest(".side-group-items")?.dataset.sideGroupItems || "";
+}
+
+function updateCurrentSideGroup(view) {
+  document.querySelectorAll(".side-group[data-side-group]").forEach((button) => {
+    button.classList.remove("is-current");
+  });
+  const groupName = sideGroupForView(view);
+  const button = sideGroupButton(groupName);
+  if (button) {
+    button.classList.add("is-current");
+  }
+}
+
+function initializeSideGroups() {
+  const state = readSideGroupState();
+  document.querySelectorAll(".side-group[data-side-group]").forEach((button) => {
+    const groupName = button.dataset.sideGroup;
+    const open = Object.prototype.hasOwnProperty.call(state, groupName) ? Boolean(state[groupName]) : true;
+    setSideGroupOpen(button, open);
+    button.addEventListener("click", () => {
+      setSideGroupOpen(button, !button.classList.contains("is-open"), true);
+    });
+  });
+  updateCurrentSideGroup(viewFromHash() || "repositories");
 }
 
 function updateHashForView(view, replace = false) {
@@ -3536,6 +3610,7 @@ function switchView(view, options = {}) {
   document.querySelectorAll(".side-item").forEach((item) => {
     item.classList.toggle("is-active", item.dataset.view === view);
   });
+  updateCurrentSideGroup(view);
   if (view === "blobstores") {
     loadBlobStores({ autoCheck: true });
   }
@@ -3564,6 +3639,7 @@ function applyHashRoute() {
 }
 
 applyOriginAwarePlaceholders();
+initializeSideGroups();
 
 document.querySelectorAll(".side-item[data-view]").forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));

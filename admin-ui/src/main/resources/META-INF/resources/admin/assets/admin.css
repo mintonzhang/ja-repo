@@ -33,7 +33,9 @@ select {
   display: grid;
   grid-template-columns: 254px minmax(0, 1fr);
   grid-template-rows: 56px minmax(0, 1fr);
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .nx-topbar {
@@ -1634,11 +1636,23 @@ textarea:focus-visible {
 .nx-sidebar {
   border-right: 1px solid var(--line);
   background: var(--sidebar);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .side-nav {
   gap: 4px;
   padding: 10px;
+}
+
+.side-group-items {
+  display: grid;
+  gap: 4px;
+}
+
+.side-group-items[hidden] {
+  display: none;
 }
 
 .side-group,
@@ -1649,14 +1663,50 @@ textarea:focus-visible {
 }
 
 .side-group {
+  justify-content: space-between;
+  gap: 8px;
   margin-top: 8px;
   padding: 0 12px;
   color: #70807a;
-  cursor: default;
+  cursor: pointer;
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.side-group:hover {
+  background: #f3f8f5;
+  color: #344641;
+}
+
+.side-group.is-current {
+  background: #edf7f4;
+  color: var(--active);
+}
+
+.side-group.is-current:not(.is-open) {
+  background: var(--active);
+  color: var(--active-ink);
+  box-shadow: 0 6px 16px rgba(20, 117, 107, 0.16);
+}
+
+.side-group-caret {
+  display: inline-flex;
+  flex: 0 0 14px;
+  justify-content: center;
+  transition: transform 0.16s ease;
+}
+
+.side-group.is-open .side-group-caret {
+  transform: rotate(90deg);
+}
+
+.side-group-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .side-group:first-child {
@@ -1664,7 +1714,7 @@ textarea:focus-visible {
 }
 
 .side-item {
-  padding: 0 14px;
+  padding: 0 14px 0 34px;
   font-size: 14px;
   font-weight: 650;
 }
@@ -1678,6 +1728,7 @@ textarea:focus-visible {
 
 .nx-content {
   background: #ffffff;
+  min-height: 0;
 }
 
 .page-heading {
@@ -2043,6 +2094,8 @@ code {
   .nx-shell {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto minmax(0, 1fr);
+    height: auto;
+    overflow: visible;
   }
 
   .nx-topbar {
@@ -2058,6 +2111,18 @@ code {
     grid-auto-flow: column;
     grid-auto-columns: max-content;
     overflow-x: auto;
+  }
+
+  .nx-sidebar {
+    overflow-y: visible;
+  }
+
+  .side-group-items:not([hidden]) {
+    display: contents;
+  }
+
+  .side-item {
+    padding-left: 26px;
   }
 
   .page-heading,
