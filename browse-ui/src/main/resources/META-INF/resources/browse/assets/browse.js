@@ -1735,7 +1735,10 @@ function cargoCoordinates(entry) {
   if (parts[0] === "api" && parts[1] === "v1" && parts[2] === "crates") {
     return { name: parts[3] || "", version: parts[4] || "" };
   }
-  return { name: parts.at(-1) || "", version: "" };
+  const leaf = parts.at(-1) || "";
+  return parts.join("/") === cargoIndexPathForCrate(leaf)
+    ? { name: leaf, version: "" }
+    : { name: "", version: "" };
 }
 
 function cargoVersionFromCrateFile(filename, crateName) {
@@ -1743,6 +1746,15 @@ function cargoVersionFromCrateFile(filename, crateName) {
   const base = filename.slice(0, -".crate".length);
   const prefix = `${crateName}-`;
   return base.startsWith(prefix) ? base.slice(prefix.length) : "";
+}
+
+function cargoIndexPathForCrate(crateName) {
+  const name = String(crateName || "").toLowerCase();
+  if (!/^[a-z0-9_-]+$/.test(name)) return "";
+  if (name.length === 1) return `1/${name}`;
+  if (name.length === 2) return `2/${name}`;
+  if (name.length === 3) return `3/${name[0]}/${name}`;
+  return `${name.slice(0, 2)}/${name.slice(2, 4)}/${name}`;
 }
 
 function cargoSourceName(repoName) {

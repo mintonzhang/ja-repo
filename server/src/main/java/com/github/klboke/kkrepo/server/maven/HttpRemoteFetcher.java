@@ -176,6 +176,7 @@ public class HttpRemoteFetcher {
           throw new IOException("Too many redirects fetching " + req.url());
         }
         var redirected = outboundPolicy.validateHttpUri(uri.resolve(redirect.get()), "remote redirect");
+        String redirectAuthorization = req.authorizationHeaderForRedirect(uri, redirected);
         return fetchInternal(new Request(
             redirected.toString(),
             req.etag(),
@@ -186,7 +187,7 @@ public class HttpRemoteFetcher {
             req.repository(),
             req.format(),
             req.trustedHost(),
-            req.authorizationHeader()), redirects + 1);
+            redirectAuthorization), redirects + 1);
       }
       Map<String, String> headers = new LinkedHashMap<>();
       response.headers().map().forEach((k, v) -> {
@@ -359,20 +360,60 @@ public class HttpRemoteFetcher {
       return uri;
     }
 
+    String authorizationHeaderForRedirect(URI current, URI redirected) {
+      if (authorizationHeader == null || authorizationHeader.isBlank()) {
+        return authorizationHeader;
+      }
+      if (!sameOrigin(current, redirected)) {
+        throw new SecurityValidationException("remote redirect URL origin must remain " + origin(current));
+      }
+      return authorizationHeader;
+    }
+
     private static String trustedRemoteHost(String url, RepositoryRuntime runtime) {
       if (runtime == null || runtime.proxyRemoteUrl() == null || runtime.proxyRemoteUrl().isBlank()) {
         return null;
       }
       try {
-        String baseHost = URI.create(runtime.proxyRemoteUrl()).getHost();
-        String requestHost = URI.create(url).getHost();
-        if (baseHost != null && requestHost != null && requestHost.equals(baseHost)) {
-          return baseHost;
+        URI base = URI.create(runtime.proxyRemoteUrl());
+        URI request = URI.create(url);
+        if (sameOrigin(base, request)) {
+          return base.getHost();
         }
       } catch (RuntimeException ignored) {
         return null;
       }
       return null;
+    }
+
+    private static boolean sameOrigin(URI a, URI b) {
+      return a != null
+          && b != null
+          && a.getScheme() != null
+          && b.getScheme() != null
+          && a.getHost() != null
+          && b.getHost() != null
+          && a.getScheme().equalsIgnoreCase(b.getScheme())
+          && a.getHost().equalsIgnoreCase(b.getHost())
+          && effectivePort(a) == effectivePort(b);
+    }
+
+    private static int effectivePort(URI uri) {
+      if (uri.getPort() >= 0) {
+        return uri.getPort();
+      }
+      String scheme = uri.getScheme();
+      if ("http".equalsIgnoreCase(scheme)) {
+        return 80;
+      }
+      if ("https".equalsIgnoreCase(scheme)) {
+        return 443;
+      }
+      return -1;
+    }
+
+    private static String origin(URI uri) {
+      return uri.getScheme() + "://" + uri.getHost() + ":" + effectivePort(uri);
     }
 
     private static String remoteAuthorizationHeader(RepositoryRuntime runtime) {

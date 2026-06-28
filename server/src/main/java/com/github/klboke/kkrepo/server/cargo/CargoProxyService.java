@@ -236,8 +236,13 @@ public class CargoProxyService {
           return reader.serveSnapshot(cached.get(), headOnly, path);
         }
         if (status >= 200 && status < 300) {
-          negativeCache.invalidate(runtime, path);
           byte[] body = UpstreamBodyReadException.readAllBytes(result.body());
+          try {
+            parseIndex(new String(body, StandardCharsets.UTF_8));
+          } catch (CargoExceptions.BadUpstreamException e) {
+            return handleUpstreamFailure(runtime, path, cached, headOnly, e.getMessage(), now);
+          }
+          negativeCache.invalidate(runtime, path);
           CargoAssetWriter.Stored stored = writer.writeMetadata(
               runtime,
               blobStorage(runtime),
@@ -389,6 +394,12 @@ public class CargoProxyService {
         }
         if (status >= 200 && status < 300) {
           byte[] body = UpstreamBodyReadException.readAllBytes(result.body());
+          CargoRemoteConfig parsed;
+          try {
+            parsed = parseRemoteConfig(new String(body, StandardCharsets.UTF_8));
+          } catch (CargoExceptions.BadUpstreamException e) {
+            return handleConfigUpstreamFailure(runtime, path, cached, e.getMessage(), now);
+          }
           writer.writeMetadata(
               runtime,
               blobStorage(runtime),
@@ -401,7 +412,7 @@ public class CargoProxyService {
               remoteAttrs(result),
               false);
           proxyStateDao.recordSuccess(runtime.id(), now);
-          return parseRemoteConfig(new String(body, StandardCharsets.UTF_8));
+          return parsed;
         }
         if (cached.isPresent()) {
           return parseRemoteConfig(reader.readText(cached.get(), path));
@@ -414,6 +425,25 @@ public class CargoProxyService {
       }
       throw new CargoExceptions.BadUpstreamException("Upstream config.json IO error: " + e.getMessage(), e);
     }
+  }
+
+  private CargoRemoteConfig handleConfigUpstreamFailure(
+      RepositoryRuntime runtime,
+      String path,
+      Optional<CachedAssetMetadata> cached,
+      String error,
+      Instant now) {
+    int failCount = proxyStateDao.loadState(runtime.id())
+        .map(ProxyStateDao.ProxyRemoteState::failCount)
+        .orElse(0);
+    long block = runtime.autoBlockOrDefault()
+        ? BACKOFF_SECONDS[Math.min(failCount, BACKOFF_SECONDS.length - 1)]
+        : 0;
+    proxyStateDao.recordFailure(runtime.id(), block, error, now);
+    if (cached.isPresent()) {
+      return parseRemoteConfig(reader.readText(cached.get(), path));
+    }
+    throw new CargoExceptions.BadUpstreamException(error);
   }
 
   private CargoRemoteConfig parseRemoteConfig(String raw) {

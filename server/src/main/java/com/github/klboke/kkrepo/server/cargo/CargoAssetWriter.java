@@ -390,7 +390,7 @@ class CargoAssetWriter {
       }
       Digests digests = new Digests(hex(md5.digest()), hex(sha1.digest()),
           hex(sha256.digest()), hex(sha512.digest()), size);
-      Optional<AssetBlobRecord> reusable = precheckedReusableBlob(blobStoreId, digests.sha256(), size, remoteAttributes);
+      Optional<AssetBlobRecord> reusable = reusableBlob(blobStoreId, digests.sha256(), size, remoteAttributes);
       if (reusable.isPresent()) {
         AssetBlobRecord blob = reusable.get();
         BlobReference ref = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
@@ -429,17 +429,6 @@ class CargoAssetWriter {
   }
 
   private Optional<AssetBlobRecord> reusableBlob(
-      long blobStoreId,
-      String sha256,
-      long size,
-      Map<String, String> remoteAttributes) {
-    if (remoteAttributes != null && !remoteAttributes.isEmpty()) {
-      return Optional.empty();
-    }
-    return assetDao.findReusableBlobBySha256(blobStoreId, sha256, size);
-  }
-
-  private Optional<AssetBlobRecord> precheckedReusableBlob(
       long blobStoreId,
       String sha256,
       long size,

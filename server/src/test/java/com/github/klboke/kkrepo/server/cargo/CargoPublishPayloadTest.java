@@ -71,6 +71,17 @@ class CargoPublishPayloadTest {
   }
 
   @Test
+  void rejectsInvalidPackageMetadataAsBadRequest() {
+    Map<String, Object> metadata = publishMetadata("hello_world", "latest");
+
+    CargoExceptions.BadRequestException thrown = assertThrows(
+        CargoExceptions.BadRequestException.class,
+        () -> CargoPublishPayload.CargoPackageMetadata.fromPublishJson(metadata));
+
+    assertEquals("Invalid Cargo package metadata", thrown.getMessage());
+  }
+
+  @Test
   @SuppressWarnings("unchecked")
   void crateInspectorBuildsPublishMetadataForUiUpload() throws Exception {
     byte[] crate = crateArchiveWithManifest("ui_demo", "0.1.0", """

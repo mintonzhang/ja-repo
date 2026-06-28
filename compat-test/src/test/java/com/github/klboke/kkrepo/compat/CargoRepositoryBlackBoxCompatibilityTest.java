@@ -801,6 +801,9 @@ class CargoRepositoryBlackBoxCompatibilityTest {
       metadata.put("vers", version);
       metadata.put("deps", List.of());
       metadata.put("features", Map.of());
+      metadata.put("features2", Map.of("namespaced", List.of()));
+      metadata.put("links", "kkrepo_compat_native");
+      metadata.put("rust_version", "1.70");
       metadata.put("description", "kkrepo Cargo compatibility fixture");
       byte[] publishBody = publishBody(metadata, crate);
       return new CargoFixture(name, version, crate, publishBody, sha256Hex(crate));

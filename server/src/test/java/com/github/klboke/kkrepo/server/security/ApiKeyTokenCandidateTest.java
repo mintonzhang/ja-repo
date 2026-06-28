@@ -27,6 +27,16 @@ class ApiKeyTokenCandidateTest {
   }
 
   @Test
+  void cargoBareTokensPreferCargoDomainBeforeNpmDomain() {
+    List<ApiKeyTokenCandidate> candidates = ApiKeyTokenCandidate.fromPresentedCargoToken("kkrepo-generated-token");
+
+    assertEquals(3, candidates.size());
+    assertEquals(new ApiKeyTokenCandidate("CargoToken", "kkrepo-generated-token"), candidates.get(0));
+    assertEquals(new ApiKeyTokenCandidate("NpmToken", "kkrepo-generated-token"), candidates.get(1));
+    assertEquals(new ApiKeyTokenCandidate(null, "kkrepo-generated-token"), candidates.get(2));
+  }
+
+  @Test
   void extractsCargoDomainPrefixAndRawToken() {
     List<ApiKeyTokenCandidate> candidates = ApiKeyTokenCandidate.fromPresentedToken("CargoToken.raw-value");
 

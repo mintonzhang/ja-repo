@@ -9,6 +9,14 @@ record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
   private static final String CARGO_TOKEN_DOMAIN = "CargoToken";
 
   static List<ApiKeyTokenCandidate> fromPresentedToken(String token) {
+    return fromPresentedToken(token, false);
+  }
+
+  static List<ApiKeyTokenCandidate> fromPresentedCargoToken(String token) {
+    return fromPresentedToken(token, true);
+  }
+
+  private static List<ApiKeyTokenCandidate> fromPresentedToken(String token, boolean preferCargoDomain) {
     String value = normalize(token);
     if (value == null) {
       return List.of();
@@ -22,9 +30,9 @@ record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
         add(candidates, domain, rawToken);
       }
     } else {
-      // Nexus npm token auth also accepts a bare bearer token and checks it in the NpmToken domain.
-      add(candidates, NPM_TOKEN_DOMAIN, value);
-      add(candidates, CARGO_TOKEN_DOMAIN, value);
+      // Bare tokens are checked in Nexus-compatible token domains before the full-token fallback.
+      add(candidates, preferCargoDomain ? CARGO_TOKEN_DOMAIN : NPM_TOKEN_DOMAIN, value);
+      add(candidates, preferCargoDomain ? NPM_TOKEN_DOMAIN : CARGO_TOKEN_DOMAIN, value);
     }
     add(candidates, null, value);
     return new ArrayList<>(candidates.values());

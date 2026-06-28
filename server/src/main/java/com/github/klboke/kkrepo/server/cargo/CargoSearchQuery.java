@@ -12,7 +12,8 @@ public record CargoSearchQuery(String query, int perPage, int page) {
   }
 
   int offset() {
-    return (page - 1) * perPage;
+    long offset = (long) (page - 1) * perPage;
+    return offset > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) offset;
   }
 
   int localScanLimit() {

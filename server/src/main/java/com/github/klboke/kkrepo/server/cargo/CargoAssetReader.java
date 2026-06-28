@@ -62,13 +62,18 @@ class CargoAssetReader {
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
     }
+    var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
+    var reference = BlobReferenceCodec.reference(
+        blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
+    if (storage.stat(reference).isEmpty()) {
+      throw new CargoExceptions.CargoNotFoundException(path);
+    }
     String etag = blob.sha1();
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, etag, lastModified);
     }
     return MavenResponse.ok(
-        () -> blobStorageRegistry.forBlobStoreId(blob.blobStoreId()).get(
-            BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
+        () -> storage.get(reference)
             .orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path)),
         blob.size(), contentType, etag, lastModified);
   }

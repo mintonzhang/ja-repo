@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -10,6 +11,7 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -121,6 +123,43 @@ class HttpRemoteFetcherTest {
         SecurityValidationException.class,
         () -> tampered.validatedUri(policy, "remote fetch"));
     assertEquals("remote fetch URL host must remain repo.example.com", error.getMessage());
+  }
+
+  @Test
+  void remoteAuthorizationIsPinnedToRepositoryRemoteOrigin() {
+    RepositoryRuntime runtime = runtime("robot", "secret", null);
+
+    HttpRemoteFetcher.Request httpSameHost = HttpRemoteFetcher.Request
+        .get("http://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime);
+    HttpRemoteFetcher.Request differentPort = HttpRemoteFetcher.Request
+        .get("https://repo.example.com:8443/maven2/com/example/app.jar")
+        .withRepository(runtime);
+    HttpRemoteFetcher.Request sameOrigin = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime);
+
+    assertNull(httpSameHost.authorizationHeader());
+    assertNull(differentPort.authorizationHeader());
+    assertNotNull(sameOrigin.authorizationHeader());
+  }
+
+  @Test
+  void redirectAuthorizationRequiresSameOrigin() {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime("robot", "secret", null));
+    URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
+
+    assertEquals(
+        request.authorizationHeader(),
+        request.authorizationHeaderForRedirect(current, URI.create("https://repo.example.com/maven2/redirect.jar")));
+    assertThrows(
+        SecurityValidationException.class,
+        () -> request.authorizationHeaderForRedirect(current, URI.create("https://repo.example.com:8443/maven2/redirect.jar")));
+    assertThrows(
+        SecurityValidationException.class,
+        () -> request.authorizationHeaderForRedirect(current, URI.create("http://repo.example.com/maven2/redirect.jar")));
   }
 
   @Test

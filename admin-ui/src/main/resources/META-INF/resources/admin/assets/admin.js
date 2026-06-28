@@ -1484,7 +1484,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-group-fields").hidden = type !== "GROUP";
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
   document.getElementById("repository-cargo-fields").hidden =
-    format !== "cargo" || (type !== "PROXY" && type !== "GROUP");
+    format !== "cargo";
   refreshDockerConnectorControls();
   document.getElementById("repository-blobstore").closest("label").hidden = false;
   refreshRepositoryBlobStoreLock();
@@ -1562,7 +1562,7 @@ function repositoryFormPayload() {
       connectorPublicUrl: textInputValue("repository-docker-connector-public-url")
     };
   }
-  if (recipe?.format === "cargo" && (type === "PROXY" || type === "GROUP")) {
+  if (recipe?.format === "cargo") {
     payload.cargo = {
       requireAuthentication: document.getElementById("repository-cargo-require-authentication").checked
     };

@@ -10,6 +10,8 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -253,6 +255,66 @@ class CargoProxyServiceTest {
 
     assertEquals(2, fetcher.calls);
     assertNull(fetcher.requests.get(1).authorizationHeader());
+  }
+
+  @Test
+  void invalidUpstreamIndexIsNotCached() {
+    AssetDao assetDao = mock(AssetDao.class);
+    when(assetDao.findAssetByPath(anyLong(), anyString())).thenReturn(Optional.empty());
+    ProxyStateDao proxyState = mock(ProxyStateDao.class);
+    when(proxyState.isBlocked(anyLong(), any(Instant.class))).thenReturn(false);
+    when(proxyState.loadState(anyLong())).thenReturn(Optional.empty());
+    CargoAssetWriter writer = mock(CargoAssetWriter.class);
+    CountingFetcher fetcher = new CountingFetcher(new HttpRemoteFetcher.Result(
+        200,
+        Map.of("Content-Type", "text/html"),
+        new ByteArrayInputStream("<html>login</html>".getBytes(StandardCharsets.UTF_8))));
+    CargoProxyService service = new CargoProxyService(
+        assetDao,
+        mock(ComponentDao.class),
+        mock(BlobStorageRegistry.class),
+        writer,
+        mock(CargoAssetReader.class),
+        proxyState,
+        fetcher,
+        new ProxyNegativeCache(new InMemorySharedCache(), true, 1440),
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0),
+        new ObjectMapper());
+
+    assertThrows(CargoExceptions.BadUpstreamException.class,
+        () -> service.index(runtime(), "itoa", false));
+
+    verify(writer, never()).writeMetadata(any(), any(), anyLong(), anyString(), any(), anyString(), anyString(), any(), any(), eq(true));
+  }
+
+  @Test
+  void invalidUpstreamConfigIsNotCached() throws Exception {
+    AssetDao assetDao = mock(AssetDao.class);
+    when(assetDao.findAssetByPath(anyLong(), anyString())).thenReturn(Optional.empty());
+    ProxyStateDao proxyState = mock(ProxyStateDao.class);
+    when(proxyState.isBlocked(anyLong(), any(Instant.class))).thenReturn(false);
+    when(proxyState.loadState(anyLong())).thenReturn(Optional.empty());
+    CargoAssetWriter writer = mock(CargoAssetWriter.class);
+    CountingFetcher fetcher = new CountingFetcher(new HttpRemoteFetcher.Result(
+        200,
+        Map.of("Content-Type", "text/html"),
+        new ByteArrayInputStream("<html>login</html>".getBytes(StandardCharsets.UTF_8))));
+    CargoProxyService service = new CargoProxyService(
+        assetDao,
+        mock(ComponentDao.class),
+        mock(BlobStorageRegistry.class),
+        writer,
+        mock(CargoAssetReader.class),
+        proxyState,
+        fetcher,
+        new ProxyNegativeCache(new InMemorySharedCache(), true, 1440),
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0),
+        new ObjectMapper());
+
+    MavenResponse response = service.search(runtime(), new CargoSearchQuery("itoa", 10, 1), false);
+
+    assertEquals("{\"crates\":[],\"meta\":{\"total\":0}}", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+    verify(writer, never()).writeMetadata(any(), any(), anyLong(), anyString(), any(), anyString(), anyString(), any(), any(), eq(false));
   }
 
   private static RepositoryRuntime runtime() {

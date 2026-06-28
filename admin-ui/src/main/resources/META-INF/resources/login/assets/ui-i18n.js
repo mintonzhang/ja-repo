@@ -72,6 +72,8 @@
     "Connector port": "连接器端口",
     "Connector port (optional)": "连接器端口（可选）",
     "Public URL": "公网 URL",
+    "Remote bearer token": "远端 Bearer token",
+    "Clear saved bearer token": "清除已保存的 Bearer token",
     "Cargo settings": "Cargo 设置",
     "Controls the Cargo registry `auth-required` client hint. Repository access is still decided by anonymous settings and security privileges.": "控制 Cargo registry `auth-required` 客户端提示。仓库访问仍由匿名访问设置和安全权限决定。",
     "Authentication requirements": "认证要求",

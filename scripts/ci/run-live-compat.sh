@@ -47,6 +47,7 @@ case "$SUITE" in
     run_tests "CargoRepositoryBlackBoxCompatibilityTest"
     ;;
   full)
+    export CARGO_COMPAT_ENABLED=true
     mvn "${COMMON_ARGS[@]}" test
     ;;
   *)

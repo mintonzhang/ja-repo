@@ -252,16 +252,17 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     if (apiKeyAuthCache == null) {
-      return resolveApiKey(token);
+      return resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token));
     }
-    return apiKeyAuthCache.find(token, () -> resolveApiKey(token));
+    return apiKeyAuthCache.find(token, () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
   }
 
   private Optional<AuthenticatedSubject> authenticateCargoApiKey(HttpServletRequest request) {
     for (String token : cargoApiKeyTokens(request)) {
       Optional<AuthenticatedSubject> resolved = apiKeyAuthCache == null
-          ? resolveApiKey(token)
-          : apiKeyAuthCache.find(token, () -> resolveApiKey(token));
+          ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedCargoToken(token))
+          : apiKeyAuthCache.find("cargo:" + token,
+              () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedCargoToken(token)));
       if (resolved.isPresent()) {
         return resolved;
       }
@@ -269,8 +270,8 @@ public class SecurityAuthenticationService {
     return Optional.empty();
   }
 
-  private Optional<AuthenticatedSubject> resolveApiKey(String token) {
-    Optional<ApiKeyRecord> match = findApiKey(token);
+  private Optional<AuthenticatedSubject> resolveApiKey(List<ApiKeyTokenCandidate> candidates) {
+    Optional<ApiKeyRecord> match = findApiKey(candidates);
     if (match.isEmpty() || !activeApiKey(match.get())) {
       return Optional.empty();
     }
@@ -285,8 +286,8 @@ public class SecurityAuthenticationService {
     return Optional.of(toSubject(owner.get(), "api-key", null, apiKey.id()));
   }
 
-  private Optional<ApiKeyRecord> findApiKey(String token) {
-    for (ApiKeyTokenCandidate candidate : ApiKeyTokenCandidate.fromPresentedToken(token)) {
+  private Optional<ApiKeyRecord> findApiKey(List<ApiKeyTokenCandidate> candidates) {
+    for (ApiKeyTokenCandidate candidate : candidates) {
       String hash = SecurityHashing.sha256(candidate.tokenMaterial());
       Optional<ApiKeyRecord> match = candidate.domainScoped()
           ? securityDao.findApiKeyByDomainAndHash(candidate.domain(), hash)

@@ -121,16 +121,20 @@ final class CargoPublishPayload implements AutoCloseable {
       Map<String, Object> publishJson) {
 
     static CargoPackageMetadata fromPublishJson(Map<String, Object> json) {
-      String name = text(json.get("name"));
-      String version = CargoVersions.requireVersion(text(json.get("vers")));
-      CargoCrateName crateName = CargoCrateName.parse(name);
-      return new CargoPackageMetadata(
-          crateName.value(),
-          crateName.lowerDashUnderscoreKey(),
-          version,
-          CargoVersions.uniquenessKey(version),
-          text(json.get("description")),
-          new LinkedHashMap<>(json));
+      try {
+        String name = text(json.get("name"));
+        String version = CargoVersions.requireVersion(text(json.get("vers")));
+        CargoCrateName crateName = CargoCrateName.parse(name);
+        return new CargoPackageMetadata(
+            crateName.value(),
+            crateName.lowerDashUnderscoreKey(),
+            version,
+            CargoVersions.uniquenessKey(version),
+            text(json.get("description")),
+            new LinkedHashMap<>(json));
+      } catch (IllegalArgumentException | NullPointerException e) {
+        throw new CargoExceptions.BadRequestException("Invalid Cargo package metadata", e);
+      }
     }
 
     static CargoPackageMetadata fromManifest(CargoCrateInspector.Manifest manifest) {

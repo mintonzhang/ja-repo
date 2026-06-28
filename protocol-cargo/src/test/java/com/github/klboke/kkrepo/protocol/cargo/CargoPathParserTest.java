@@ -51,4 +51,11 @@ class CargoPathParserTest {
     assertEquals(CargoPath.Kind.UNKNOWN, parser.parse("ca/cargo").kind());
     assertEquals(CargoPath.Kind.UNKNOWN, parser.parse("3/b/abc").kind());
   }
+
+  @Test
+  void rejectsNonSemverVersionRoutes() {
+    assertEquals(CargoPath.Kind.UNKNOWN, parser.parse("api/v1/crates/cargo/latest/download").kind());
+    assertEquals(CargoPath.Kind.UNKNOWN, parser.parse("api/v1/crates/cargo/1/yank").kind());
+    assertEquals(CargoPath.Kind.UNKNOWN, parser.parse("crates/cargo/1.0/cargo-1.0.crate").kind());
+  }
 }

@@ -290,6 +290,57 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void cargoAuthenticationPrefersCargoDomainWhenBareTokenCollides() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(user(1L, "Local", "npm-user", NEXUS_SHIRO1_ADMIN123));
+    dao.user(user(2L, "Local", "cargo-user", NEXUS_SHIRO1_ADMIN123));
+    dao.roles(1L, "npm-publisher");
+    dao.roles(2L, "cargo-publisher");
+    String hash = SecurityHashing.sha256("shared-secret");
+    dao.apiKey(new ApiKeyRecord(
+        21L,
+        "NpmToken",
+        "Local",
+        "npm-user",
+        "NPM token",
+        "ACTIVE",
+        hash,
+        "NpmToken.raw",
+        Map.of(),
+        "{}",
+        null,
+        null,
+        null,
+        null));
+    dao.apiKey(new ApiKeyRecord(
+        22L,
+        "CargoToken",
+        "Local",
+        "cargo-user",
+        "Cargo token",
+        "ACTIVE",
+        hash,
+        "CargoToken.raw",
+        Map.of(),
+        "{}",
+        null,
+        null,
+        null,
+        null));
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> cargoAuthenticated = service.authenticateCargo(request(Map.of(
+        "Authorization", "shared-secret")));
+    Optional<AuthenticatedSubject> normalAuthenticated = service.authenticate(request(Map.of(
+        "Authorization", "Bearer shared-secret")));
+
+    assertTrue(cargoAuthenticated.isPresent());
+    assertEquals("cargo-user", cargoAuthenticated.get().userId());
+    assertTrue(normalAuthenticated.isPresent());
+    assertEquals("npm-user", normalAuthenticated.get().userId());
+  }
+
+  @Test
   void cargoAuthenticationAcceptsCompleteBasicAuthorizationHeaderAsToken() {
     String cargoHeaderToken = "Basic " + Base64.getEncoder()
         .encodeToString("nexus-user-token".getBytes(StandardCharsets.UTF_8));
