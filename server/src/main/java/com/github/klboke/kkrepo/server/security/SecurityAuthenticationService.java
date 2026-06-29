@@ -881,6 +881,10 @@ public class SecurityAuthenticationService {
     if (fromKkRepoApiKey != null) {
       return fromKkRepoApiKey;
     }
+    String fromNuGetApiKey = headerValue(request, "X-NuGet-ApiKey");
+    if (fromNuGetApiKey != null) {
+      return domainScopedApiKey("NuGetApiKey", fromNuGetApiKey);
+    }
     String bearer = bearerToken(request);
     if (bearer != null) {
       return bearer;
@@ -914,6 +918,13 @@ public class SecurityAuthenticationService {
     if (!tokens.contains(normalized)) {
       tokens.add(normalized);
     }
+  }
+
+  private static String domainScopedApiKey(String domain, String token) {
+    if (token.regionMatches(true, 0, domain + ".", 0, domain.length() + 1)) {
+      return token;
+    }
+    return domain + "." + token;
   }
 
   private String bearerToken(HttpServletRequest request) {

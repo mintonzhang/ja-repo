@@ -7,6 +7,7 @@ import java.util.List;
 record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
   private static final String NPM_TOKEN_DOMAIN = "NpmToken";
   private static final String CARGO_TOKEN_DOMAIN = "CargoToken";
+  private static final String NUGET_API_KEY_DOMAIN = "NuGetApiKey";
 
   static List<ApiKeyTokenCandidate> fromPresentedToken(String token) {
     return fromPresentedToken(token, false);
@@ -33,6 +34,7 @@ record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
       // Bare tokens are checked in Nexus-compatible token domains before the full-token fallback.
       add(candidates, preferCargoDomain ? CARGO_TOKEN_DOMAIN : NPM_TOKEN_DOMAIN, value);
       add(candidates, preferCargoDomain ? NPM_TOKEN_DOMAIN : CARGO_TOKEN_DOMAIN, value);
+      add(candidates, NUGET_API_KEY_DOMAIN, value);
     }
     add(candidates, null, value);
     return new ArrayList<>(candidates.values());
