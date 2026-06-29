@@ -284,7 +284,7 @@ registry=$KKREPO_URL/repository/npm-hosted/
 //$npm_registry_host/repository/npm-group/:_authToken=$token
 always-auth=true
 EOF
-  run_logged npm-publish npm --userconfig "$dir/.npmrc" --prefix "$dir" publish --registry "$KKREPO_URL/repository/npm-hosted/"
+  run_logged_in npm-publish "$dir" npm --userconfig "$dir/.npmrc" publish --registry "$KKREPO_URL/repository/npm-hosted/"
   cat >"$install_dir/package.json" <<EOF
 {"name":"npm-install-$STAMP","version":"1.0.0","dependencies":{"$package":"1.0.0"}}
 EOF
