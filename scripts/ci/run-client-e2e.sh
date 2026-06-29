@@ -373,7 +373,7 @@ for line in open(path, encoding="utf-8"):
 open(path, "w", encoding="utf-8").writelines(data)
 PY
   run_logged helm-package helm package "$dir/$chart" --destination "$dir/dist"
-  run_logged helm-upload curl -m 30 -fsS -u "$KKREPO_AUTH" \
+  run_logged helm-upload curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
     --upload-file "$dir/dist/$chart-1.0.0.tgz" \
     "$KKREPO_URL/repository/helm-hosted/$chart-1.0.0.tgz"
   wait_for_body_contains helm-index "$chart" \
@@ -529,7 +529,7 @@ test_yum() {
   local upload_path="Packages/client-e2e-$STAMP/$(basename "$rpm_url")"
   mkdir -p "$dir"
   run_logged yum-fixture curl -L -m 120 -fsS "$rpm_url" -o "$rpm"
-  run_logged yum-upload curl -m 60 -fsS -u "$KKREPO_AUTH" \
+  run_logged yum-upload curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
     --upload-file "$rpm" \
     "$KKREPO_URL/repository/yum-hosted/$upload_path"
   wait_for_body_contains yum-repomd "primary" \

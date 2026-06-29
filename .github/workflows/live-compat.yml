@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   live-compat:
-    name: Live compatibility
+    name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility' || 'Live compatibility' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite != 'cargo') || (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-live-compat') || contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
@@ -114,7 +114,12 @@ jobs:
       - name: Prepare live compatibility fixtures
         run: scripts/ci/live-compat-setup.sh
 
+      - name: Run client E2E suite
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
+
       - name: Run live compatibility suite
+        if: env.LIVE_COMPAT_SUITE != 'client-e2e'
         run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
 
       - name: Collect compose logs
