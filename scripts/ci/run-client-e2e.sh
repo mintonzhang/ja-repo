@@ -416,6 +416,9 @@ pub fn message() -> &'static str {
 }
 EOF
   cat >"$crate_dir/.cargo/config.toml" <<EOF
+[registry]
+global-credential-providers = ["cargo:token"]
+
 [registries.kkrepo]
 index = "sparse+$KKREPO_URL/repository/cargo-hosted/"
 EOF
@@ -429,6 +432,9 @@ EOF
   run_logged cargo-fetch-new cargo new --bin "$fetch_dir"
   mkdir -p "$fetch_dir/.cargo"
   cat >"$fetch_dir/.cargo/config.toml" <<EOF
+[registry]
+global-credential-providers = ["cargo:token"]
+
 [registries.kkrepo]
 index = "sparse+$KKREPO_URL/repository/cargo-group/"
 EOF
