@@ -547,7 +547,7 @@ Gem::Specification.new do |spec|
 end
 EOF
   echo 'module KkRepoClientE2ERubyGems; VALUE = "kkrepo client e2e"; end' >"$dir/lib/$name.rb"
-  run_logged rubygems-build gem build "$dir/$name.gemspec" --output "$dir/$name-1.0.0.gem"
+  run_logged_in rubygems-build "$dir" gem build "$name.gemspec" --output "$dir/$name-1.0.0.gem"
   run_logged rubygems-push gem push "$dir/$name-1.0.0.gem" \
     --host "$KKREPO_AUTH_URL/repository/rubygems-hosted/"
   wait_for_body_contains rubygems-versions "$name" \
