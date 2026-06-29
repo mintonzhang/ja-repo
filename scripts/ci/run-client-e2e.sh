@@ -520,9 +520,8 @@ test_nuget() {
     --api-key "$token" \
     --timeout 120
   run_logged nuget-consumer-new dotnet new console -n Consumer -o "$restore_dir/Consumer" --framework net8.0
-  run_logged nuget-add-package dotnet add "$restore_dir/Consumer/Consumer.csproj" package "$package" \
+  run_logged_in nuget-add-package "$restore_dir/Consumer" dotnet add package "$package" \
     --version 1.0.0 \
-    --configfile "$restore_dir/NuGet.Config" \
     --package-directory "$packages_dir"
   run_logged nuget-restore dotnet restore "$restore_dir/Consumer/Consumer.csproj" \
     --configfile "$restore_dir/NuGet.Config" \
