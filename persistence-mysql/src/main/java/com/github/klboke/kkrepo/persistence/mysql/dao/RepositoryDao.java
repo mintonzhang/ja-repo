@@ -46,6 +46,7 @@ public class RepositoryDao {
         rs.getString("layout_policy"),
         rs.getString("write_policy"),
         rs.getBoolean("strict_content_type_validation"),
+        rs.getString("notes"),
         decryptAttributes(jsonColumns.read(rs.getString("attributes_json"))));
   }
 
@@ -102,8 +103,8 @@ public class RepositoryDao {
         INSERT INTO repository
           (name, format, type, recipe_name, online, blob_store_id, routing_rule_id,
            proxy_remote_url, version_policy, layout_policy, write_policy,
-           strict_content_type_validation, attributes_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           strict_content_type_validation, notes, attributes_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, ps -> {
       ps.setString(1, record.name());
       ps.setString(2, EnumColumns.write(record.format()));
@@ -117,7 +118,8 @@ public class RepositoryDao {
       ps.setString(10, record.layoutPolicy());
       ps.setString(11, record.writePolicy());
       ps.setBoolean(12, record.strictContentTypeValidation());
-      ps.setString(13, writeAttributes(record.attributes()));
+      ps.setString(13, record.notes());
+      ps.setString(14, writeAttributes(record.attributes()));
     });
   }
 
@@ -142,7 +144,7 @@ public class RepositoryDao {
         UPDATE repository
         SET online = ?, blob_store_id = ?, routing_rule_id = ?, proxy_remote_url = ?,
             version_policy = ?, layout_policy = ?, write_policy = ?,
-            strict_content_type_validation = ?, attributes_json = ?
+            strict_content_type_validation = ?, notes = ?, attributes_json = ?
         WHERE id = ?
         """,
         record.online(),
@@ -153,6 +155,7 @@ public class RepositoryDao {
         record.layoutPolicy(),
         record.writePolicy(),
         record.strictContentTypeValidation(),
+        record.notes(),
         writeAttributes(record.attributes()),
         record.id());
   }
@@ -165,7 +168,7 @@ public class RepositoryDao {
           SET format = ?, type = ?, recipe_name = ?, online = ?, blob_store_id = ?,
               routing_rule_id = ?, proxy_remote_url = ?, version_policy = ?,
               layout_policy = ?, write_policy = ?, strict_content_type_validation = ?,
-              attributes_json = ?
+              notes = ?, attributes_json = ?
           WHERE name = ?
           """,
           EnumColumns.write(record.format()),
@@ -179,6 +182,7 @@ public class RepositoryDao {
           record.layoutPolicy(),
           record.writePolicy(),
           record.strictContentTypeValidation(),
+          record.notes(),
           writeAttributes(record.attributes()),
           record.name());
       return findByName(record.name()).orElseThrow();

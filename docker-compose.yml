@@ -1,0 +1,8 @@
+services:
+  ja-repo:
+    build:
+      dockerfile: Dockerfile
+    container_name: ja-repo
+    image: docker.jasolar.com/base/nexus/ja-repo:lastest
+    ports:
+      - "8080:8080"

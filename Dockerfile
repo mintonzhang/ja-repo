@@ -10,10 +10,10 @@ RUN groupadd --system kkrepo \
 COPY ${JAR_FILE} /app/kkrepo.jar
 
 ENV JAVA_OPTS="" \
-    SPRING_PROFILES_ACTIVE=default
+    SPRING_PROFILES_ACTIVE=prod
 
 EXPOSE 8080 8081
 
 USER kkrepo
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/kkrepo.jar \"$@\"", "--"]
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/kkrepo.jar -Dspring.profiles.active=${SPRING_PROFILES_ACTIVE}\"$@\"", "--"]

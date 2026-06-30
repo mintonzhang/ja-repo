@@ -19,6 +19,7 @@ public record RepositoryView(
     String blobStoreName,
     boolean strictContentTypeValidation,
     String url,
+    String notes,
     HostedSettings hosted,
     ProxySettings proxy,
     RawSettings raw,

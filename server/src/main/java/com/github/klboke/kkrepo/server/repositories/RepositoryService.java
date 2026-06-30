@@ -224,7 +224,7 @@ public class RepositoryService {
     RepositoryRecord toInsert = new RepositoryRecord(
         null, name, recipe.format(), recipe.type(), recipe.name(), online,
         blobStoreId, null, proxyRemoteUrl, versionPolicy, layoutPolicy, writePolicy,
-        strict, attributes);
+        strict, command.notes(), attributes);
     long id = repositoryDao.insert(toInsert);
 
     if (recipe.type() == RepositoryType.GROUP) {
@@ -309,10 +309,12 @@ public class RepositoryService {
       }
     }
 
+    String notes = command.notes() == null ? existing.notes() : command.notes();
+
     RepositoryRecord toUpdate = new RepositoryRecord(
         existing.id(), existing.name(), existing.format(), existing.type(), existing.recipeName(),
         online, blobStoreId, existing.routingRuleId(), proxyRemoteUrl,
-        versionPolicy, layoutPolicy, writePolicy, strict, attributes);
+        versionPolicy, layoutPolicy, writePolicy, strict, notes, attributes);
     repositoryDao.update(toUpdate);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
@@ -658,6 +660,7 @@ public class RepositoryService {
         record.id(), record.name(), record.recipeName(),
         record.format(), record.type(), record.online(),
         blobStoreName, record.strictContentTypeValidation(), url,
+        record.notes(),
         hosted, proxy, raw, docker, cargo, group);
   }
 

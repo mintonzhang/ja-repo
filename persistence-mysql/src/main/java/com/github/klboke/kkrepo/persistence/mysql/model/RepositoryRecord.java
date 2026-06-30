@@ -18,5 +18,6 @@ public record RepositoryRecord(
     String layoutPolicy,
     String writePolicy,
     boolean strictContentTypeValidation,
+    String notes,
     Map<String, Object> attributes) {
 }

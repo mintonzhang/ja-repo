@@ -1626,7 +1626,8 @@ function repositoryFormPayload() {
     name: document.getElementById("repository-name").value.trim(),
     recipe: document.getElementById("repository-recipe").value,
     online: document.getElementById("repository-online").checked,
-    strictContentTypeValidation: document.getElementById("repository-strict").checked
+    strictContentTypeValidation: document.getElementById("repository-strict").checked,
+    notes: document.getElementById("repository-notes").value.trim() || null
   };
   if (repositoryFormMode === "create") {
     payload.blobStoreName = document.getElementById("repository-blobstore").value || null;
@@ -1676,6 +1677,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-name").value = "";
   document.getElementById("repository-online").checked = true;
   document.getElementById("repository-strict").checked = true;
+  document.getElementById("repository-notes").value = "";
   document.getElementById("repository-write-policy").value = "ALLOW_ONCE";
   document.getElementById("repository-version-policy").value = "RELEASE";
   document.getElementById("repository-layout-policy").value = "STRICT";
@@ -1751,6 +1753,7 @@ function showEditRepositoryForm(name) {
   document.getElementById("repository-recipe").value = repo.recipe;
   document.getElementById("repository-online").checked = Boolean(repo.online);
   document.getElementById("repository-strict").checked = Boolean(repo.strictContentTypeValidation);
+  document.getElementById("repository-notes").value = repo.notes || "";
   refreshRepositoryBlobStoreOptions();
   if (repo.blobStoreName) {
     document.getElementById("repository-blobstore").value = repo.blobStoreName;

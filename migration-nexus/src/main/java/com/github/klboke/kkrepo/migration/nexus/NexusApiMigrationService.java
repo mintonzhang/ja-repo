@@ -410,6 +410,7 @@ public class NexusApiMigrationService {
         mavenSetting(document, "layoutPolicy"),
         normalizeWritePolicy(string(nested(value(document, "storage"), "writePolicy"))),
         bool(nested(value(document, "storage"), "strictContentTypeValidation"), true),
+        null,
         Map.copyOf(attributes));
   }
 
