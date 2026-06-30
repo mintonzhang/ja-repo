@@ -1,0 +1,45 @@
+kkrepo:
+  security:
+    outbound:
+      allow-private-addresses: true
+  ui:
+    product-name: ${KKREPO_UI_PRODUCT_NAME:jasolar-repo}
+    product-subtitle: ${KKREPO_UI_PRODUCT_SUBTITLE:晶澳制品仓库}
+    logo-text: ${KKREPO_UI_LOGO_TEXT:JR}
+    logo-url: ${KKREPO_UI_LOGO_URL:}
+    favicon-url: ${KKREPO_UI_FAVICON_URL:}
+logging:
+  level:
+    com.github.klboke.kkrepo: DEBUG
+    org.springframework.jdbc.core.JdbcTemplate: DEBUG
+management:
+  server:
+    port: 18091
+server:
+  port: 18090
+spring:
+  datasource:
+    password: kkrepo
+    url: jdbc:mysql://127.0.0.1:23306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+    username: kkrepo
+  devtools:
+    livereload:
+      enabled: true
+    restart:
+      additional-paths:
+        - ../admin-ui/src/main/resources
+        - ../browse-ui/src/main/resources
+      enabled: true
+      exclude: static/**,public/**,META-INF/resources/admin/**,META-INF/resources/browse/**
+  thymeleaf:
+    cache: false
+  web:
+    resources:
+      cache:
+        period: 0
+      static-locations:
+        - file:${user.dir}/admin-ui/src/main/resources/META-INF/resources/
+        - file:${user.dir}/browse-ui/src/main/resources/META-INF/resources/
+        - file:${user.dir}/../admin-ui/src/main/resources/META-INF/resources/
+        - file:${user.dir}/../browse-ui/src/main/resources/META-INF/resources/
+        - classpath:/META-INF/resources/

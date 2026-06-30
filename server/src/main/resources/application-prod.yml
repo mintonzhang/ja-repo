@@ -1,0 +1,21 @@
+kkrepo:
+  security:
+    encryption:
+      api-key-payload-secret: ${KKREPO_API_KEY_PAYLOAD_SECRET:thisisjasolarreop}
+      credential-secret: ${KKREPO_CREDENTIAL_SECRET:thisisjasolarreop}
+  ui:
+    favicon-url: ${KKREPO_UI_FAVICON_URL:}
+    logo-text: ${KKREPO_UI_LOGO_TEXT:JR}
+    logo-url: ${KKREPO_UI_LOGO_URL:}
+    product-name: ${KKREPO_UI_PRODUCT_NAME:jasolar-repo}
+    product-subtitle: ${KKREPO_UI_PRODUCT_SUBTITLE:晶澳制品仓库}
+management:
+  server:
+    port: 8081
+server:
+  port: 8080
+spring:
+  datasource:
+    password: kkrepo
+    url: jdbc:mysql://127.0.0.1:23306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+    username: kkrepo

@@ -1,0 +1,198 @@
+app:
+  id: infra-kkrepo
+kkrepo:
+  blob:
+    transfer-buffer-size-bytes: ${KKREPO_BLOB_TRANSFER_BUFFER_SIZE_BYTES:1048576}
+  blob-gc:
+    batch-size: ${KKREPO_BLOB_GC_BATCH_SIZE:64}
+    claim-retry-seconds: ${KKREPO_BLOB_GC_CLAIM_RETRY_SECONDS:600}
+    deleted-grace-seconds: ${KKREPO_BLOB_GC_DELETED_GRACE_SECONDS:3600}
+    enabled: ${KKREPO_BLOB_GC_ENABLED:true}
+    poll-interval-ms: ${KKREPO_BLOB_GC_POLL_INTERVAL_MS:30000}
+    reconcile-mark-batch-size: ${KKREPO_BLOB_GC_RECONCILE_MARK_BATCH_SIZE:${KKREPO_BLOB_GC_RECONCILE_BATCH_SIZE:256}}
+    reconcile-scan-batch-size: ${KKREPO_BLOB_GC_RECONCILE_SCAN_BATCH_SIZE:1024}
+  cache:
+    asset-metadata:
+      enabled: ${KKREPO_CACHE_ASSET_METADATA_ENABLED:true}
+      missing-ttl-seconds: ${KKREPO_CACHE_ASSET_METADATA_MISSING_TTL_SECONDS:5}
+      ttl-seconds: ${KKREPO_CACHE_ASSET_METADATA_TTL_SECONDS:60}
+    backend: ${KKREPO_CACHE_BACKEND:memory}
+    basic-auth:
+      enabled: ${KKREPO_CACHE_BASIC_AUTH_ENABLED:true}
+      missing-ttl-seconds: ${KKREPO_CACHE_BASIC_AUTH_MISSING_TTL_SECONDS:5}
+      ttl-seconds: ${KKREPO_CACHE_BASIC_AUTH_TTL_SECONDS:120}
+    group-member-asset:
+      enabled: ${KKREPO_CACHE_GROUP_MEMBER_ASSET_ENABLED:true}
+      ttl-seconds: ${KKREPO_CACHE_GROUP_MEMBER_ASSET_TTL_SECONDS:60}
+    memory:
+      maximum-size: ${KKREPO_CACHE_MEMORY_MAXIMUM_SIZE:500000}
+    npm-group-packument:
+      enabled: ${KKREPO_CACHE_NPM_GROUP_PACKUMENT_ENABLED:true}
+    pypi-group-simple-index:
+      enabled: ${KKREPO_CACHE_PYPI_GROUP_SIMPLE_INDEX_ENABLED:true}
+    repository-token:
+      local-ttl-seconds: ${KKREPO_CACHE_REPOSITORY_TOKEN_LOCAL_TTL_SECONDS:2}
+    version:
+      local-ttl-seconds: ${KKREPO_CACHE_VERSION_LOCAL_TTL_SECONDS:2}
+  catalog-cache:
+    broadcast-backend: ${KKREPO_CATALOG_CACHE_BROADCAST_BACKEND:mysql}
+    enabled: ${KKREPO_CATALOG_CACHE_ENABLED:true}
+    initial-delay-ms: ${KKREPO_CATALOG_CACHE_INITIAL_DELAY_MS:60000}
+    mysql:
+      initial-delay-ms: ${KKREPO_CATALOG_CACHE_MYSQL_INITIAL_DELAY_MS:500}
+      initial-jitter-ms: ${KKREPO_CATALOG_CACHE_MYSQL_INITIAL_JITTER_MS:100}
+      poll-delay-ms: ${KKREPO_CATALOG_CACHE_MYSQL_POLL_DELAY_MS:500}
+    refresh-interval-ms: ${KKREPO_CATALOG_CACHE_REFRESH_INTERVAL_MS:60000}
+  compatibility:
+    repository-url-prefix: /repository
+  maven:
+    runtime-cache-ttl-seconds: ${KKREPO_MAVEN_RUNTIME_CACHE_TTL_SECONDS:30}
+  proxy:
+    body-read-retry-attempts: ${KKREPO_PROXY_BODY_READ_RETRY_ATTEMPTS:${KKREPO_MAVEN_PROXY_BODY_READ_RETRY_ATTEMPTS:1}}
+    content-timeout-seconds: ${KKREPO_PROXY_CONTENT_TIMEOUT_SECONDS:${KKREPO_PROXY_GET_TIMEOUT_SECONDS:${KKREPO_MAVEN_PROXY_GET_TIMEOUT_SECONDS:120}}}
+    head-timeout-seconds: ${KKREPO_PROXY_HEAD_TIMEOUT_SECONDS:${KKREPO_MAVEN_PROXY_HEAD_TIMEOUT_SECONDS:5}}
+    metadata-timeout-seconds: ${KKREPO_PROXY_METADATA_TIMEOUT_SECONDS:${KKREPO_MAVEN_PROXY_GET_TIMEOUT_SECONDS:60}}
+    negative-cache:
+      enabled: ${KKREPO_PROXY_NEGATIVE_CACHE_ENABLED:${KKREPO_MAVEN_PROXY_NEGATIVE_CACHE_ENABLED:true}}
+      ttl-minutes: ${KKREPO_PROXY_NEGATIVE_CACHE_TTL_MINUTES:${KKREPO_MAVEN_PROXY_NEGATIVE_CACHE_TTL_MINUTES:5}}
+    remote-http-version: ${KKREPO_PROXY_REMOTE_HTTP_VERSION:HTTP_1_1}
+    search-timeout-seconds: ${KKREPO_PROXY_SEARCH_TIMEOUT_SECONDS:${KKREPO_NPM_PROXY_SEARCH_TIMEOUT_SECONDS:30}}
+  pypi:
+    index:
+      sync-wait-ms: ${KKREPO_PYPI_INDEX_SYNC_WAIT_MS:0}
+  repository:
+    log-non-success-request-excluded-statuses: ${KKREPO_REPOSITORY_LOG_NON_SUCCESS_REQUEST_EXCLUDED_STATUSES:477,488}
+    log-non-success-requests: ${KKREPO_REPOSITORY_LOG_NON_SUCCESS_REQUESTS:true}
+  repository-index-rebuild:
+    batch-size: ${KKREPO_REPOSITORY_INDEX_REBUILD_BATCH_SIZE:16}
+    enabled: ${KKREPO_REPOSITORY_INDEX_REBUILD_ENABLED:true}
+    poll-interval-ms: ${KKREPO_REPOSITORY_INDEX_REBUILD_POLL_INTERVAL_MS:1000}
+  security:
+    anonymous-read-enabled: false
+    authentication-ticket-cleanup-initial-delay-ms: ${KKREPO_AUTHENTICATION_TICKET_CLEANUP_INITIAL_DELAY_MS:60000}
+    authentication-ticket-cleanup-interval-ms: ${KKREPO_AUTHENTICATION_TICKET_CLEANUP_INTERVAL_MS:60000}
+    authentication-ticket-ttl-seconds: ${KKREPO_AUTHENTICATION_TICKET_TTL_SECONDS:300}
+    authorization-cache:
+      enabled: ${KKREPO_SECURITY_AUTHORIZATION_CACHE_ENABLED:true}
+      ttl-minutes: ${KKREPO_SECURITY_AUTHORIZATION_CACHE_TTL_MINUTES:10}
+      version-local-ttl-seconds: ${KKREPO_SECURITY_AUTHORIZATION_CACHE_VERSION_LOCAL_TTL_SECONDS:2}
+    csrf:
+      cookie-secure: ${KKREPO_CSRF_COOKIE_SECURE:false}
+    default-authenticated-role-id: ${KKREPO_DEFAULT_AUTHENTICATED_ROLE_ID:nx-anonymous}
+    encryption:
+      api-key-payload-secret: ${KKREPO_API_KEY_PAYLOAD_SECRET:}
+      credential-secret: ${KKREPO_CREDENTIAL_SECRET:}
+    external-base-url: ${KKREPO_EXTERNAL_BASE_URL:}
+    forwarded-headers:
+      trusted-proxies: ${KKREPO_TRUSTED_PROXIES:}
+    hsts-enabled: ${KKREPO_HSTS_ENABLED:false}
+    outbound:
+      allow-private-addresses: ${KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES:false}
+      allowed-hosts: ${KKREPO_OUTBOUND_ALLOWED_HOSTS:}
+    rate-limit:
+      bootstrap-per-minute: ${KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE:5}
+      login-per-minute: ${KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE:20}
+    token-header: X-Nexus-Plus-Token
+    upload:
+      max-request-bytes: ${KKREPO_UPLOAD_MAX_REQUEST_BYTES:1073741824}
+  storage:
+    file:
+      base-dir: ${KKREPO_FILE_BASE_DIR:blobs}
+      enabled: ${KKREPO_FILE_ENABLED:true}
+      production-enabled: ${KKREPO_FILE_PRODUCTION_ENABLED:false}
+      shared-filesystem: ${KKREPO_FILE_SHARED_FILESYSTEM:false}
+      temp-cleanup-enabled: ${KKREPO_FILE_TEMP_CLEANUP_ENABLED:true}
+      temp-cleanup-grace-seconds: ${KKREPO_FILE_TEMP_CLEANUP_GRACE_SECONDS:86400}
+      temp-cleanup-interval-ms: ${KKREPO_FILE_TEMP_CLEANUP_INTERVAL_MS:300000}
+    s3:
+      connection-acquisition-timeout-ms: ${KKREPO_S3_CONNECTION_ACQUISITION_TIMEOUT_MS:10000}
+      connection-timeout-ms: ${KKREPO_S3_CONNECTION_TIMEOUT_MS:5000}
+      max-connections: ${KKREPO_S3_MAX_CONNECTIONS:512}
+      multipart-concurrency: ${KKREPO_S3_MULTIPART_CONCURRENCY:4}
+      multipart-part-size-bytes: ${KKREPO_S3_MULTIPART_PART_SIZE_BYTES:16777216}
+      multipart-threshold-bytes: ${KKREPO_S3_MULTIPART_THRESHOLD_BYTES:67108864}
+      socket-timeout-ms: ${KKREPO_S3_SOCKET_TIMEOUT_MS:120000}
+      tcp-keep-alive: ${KKREPO_S3_TCP_KEEP_ALIVE:true}
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  server:
+    port: ${KKREPO_MANAGEMENT_PORT:8081}
+server:
+  port: 8080
+  servlet:
+    context-path: /
+    session:
+      cookie:
+        http-only: true
+        max-age: ${KKREPO_SESSION_COOKIE_MAX_AGE:-1}
+        same-site: lax
+        secure: ${KKREPO_SESSION_COOKIE_SECURE:false}
+      timeout: ${KKREPO_SESSION_TIMEOUT:24h}
+  shutdown: graceful
+  tomcat:
+    accept-count: ${KKREPO_TOMCAT_ACCEPT_COUNT:200}
+    connection-timeout: ${KKREPO_TOMCAT_CONNECTION_TIMEOUT:30s}
+    max-connections: ${KKREPO_TOMCAT_MAX_CONNECTIONS:2000}
+    threads:
+      max: ${KKREPO_TOMCAT_THREADS_MAX:100}
+      min-spare: ${KKREPO_TOMCAT_THREADS_MIN_SPARE:10}
+spring:
+  application:
+    name: kkrepo
+  profiles:
+    active: prod
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      connection-timeout: ${KKREPO_HIKARI_CONNECTION_TIMEOUT_MS:5000}
+      idle-timeout: ${KKREPO_HIKARI_IDLE_TIMEOUT_MS:600000}
+      leak-detection-threshold: ${KKREPO_HIKARI_LEAK_DETECTION_THRESHOLD_MS:30000}
+      max-lifetime: ${KKREPO_HIKARI_MAX_LIFETIME_MS:1800000}
+      maximum-pool-size: ${KKREPO_HIKARI_MAXIMUM_POOL_SIZE:50}
+      minimum-idle: ${KKREPO_HIKARI_MINIMUM_IDLE:10}
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 1
+    enabled: true
+    locations: classpath:db/migration
+    out-of-order: false
+    validate-on-migrate: true
+  http:
+    converters:
+      preferred-json-mapper: jackson2
+  jackson:
+    default-property-inclusion: non_null
+    time-zone: Asia/Shanghai
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  mvc:
+    async:
+      request-timeout: 10m
+
+  servlet:
+    multipart:
+      max-file-size: ${KKREPO_MULTIPART_MAX_FILE_SIZE:1024MB}
+      max-request-size: ${KKREPO_MULTIPART_MAX_REQUEST_SIZE:1024MB}
+  session:
+    jdbc:
+      flush-mode: on_save
+      initialize-schema: never
+      table-name: SPRING_SESSION
+    store-type: ${KKREPO_SESSION_STORE_TYPE:jdbc}
+    timeout: ${KKREPO_SESSION_TIMEOUT:24h}
+  task:
+    scheduling:
+      pool:
+        size: ${KKREPO_TASK_SCHEDULING_POOL_SIZE:4}

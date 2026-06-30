@@ -75,6 +75,34 @@ function installCsrfFetch() {
   };
 }
 
+async function applyBranding() {
+  try {
+    const res = await fetch("/internal/ui-settings/branding", { cache: "no-store" });
+    if (!res.ok) return;
+    const branding = await res.json();
+    if (branding.productName) {
+      document.querySelectorAll(".product-name").forEach((el) => {
+        el.innerHTML = `${escapeHtml(branding.productName)}<br>${escapeHtml(branding.productSubtitle || "Repository Manager")}`;
+      });
+      document.title = `${branding.productName} browse`;
+    }
+    if (branding.faviconUrl) {
+      document.querySelectorAll("link[rel='icon']").forEach((link) => {
+        link.href = branding.faviconUrl;
+      });
+    }
+    document.querySelectorAll(".logo-mark").forEach((el) => {
+      if (branding.logoUrl) {
+        el.innerHTML = `<img src="${escapeHtml(branding.logoUrl)}" alt="" style="width:100%;height:100%;object-fit:contain;border-radius:4px;">`;
+        el.style.background = "none";
+        el.style.border = "none";
+      } else if (branding.logoText) {
+        el.textContent = branding.logoText;
+      }
+    });
+  } catch { /* ignore */ }
+}
+
 function sameOrigin(input) {
   const url = typeof input === "string" ? input : input.url;
   return new URL(url, window.location.origin).origin === window.location.origin;
@@ -2600,6 +2628,7 @@ function applyHashRoute() {
 }
 
 async function bootstrap() {
+  applyBranding();
   try {
     adminBootstrapStatus = await fetchAdminBootstrapStatus();
   } catch (e) {

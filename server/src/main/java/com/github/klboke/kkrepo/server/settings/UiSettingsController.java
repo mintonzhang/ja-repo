@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.UiSettingsDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.UiSettingsRecord;
 import java.time.Instant;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,14 +23,35 @@ public class UiSettingsController {
       UiSettingsDao.LANGUAGE_EN);
 
   private final UiSettingsDao uiSettingsDao;
+  private final String productName;
+  private final String productSubtitle;
+  private final String logoText;
+  private final String logoUrl;
+  private final String faviconUrl;
 
-  public UiSettingsController(UiSettingsDao uiSettingsDao) {
+  public UiSettingsController(
+      UiSettingsDao uiSettingsDao,
+      @Value("${kkrepo.ui.product-name:kkrepo}") String productName,
+      @Value("${kkrepo.ui.product-subtitle:Repository Manager}") String productSubtitle,
+      @Value("${kkrepo.ui.logo-text:KL}") String logoText,
+      @Value("${kkrepo.ui.logo-url:}") String logoUrl,
+      @Value("${kkrepo.ui.favicon-url:}") String faviconUrl) {
     this.uiSettingsDao = uiSettingsDao;
+    this.productName = productName;
+    this.productSubtitle = productSubtitle;
+    this.logoText = logoText;
+    this.logoUrl = logoUrl;
+    this.faviconUrl = faviconUrl;
   }
 
   @GetMapping
   public UiSettingsView read() {
     return toView(uiSettingsDao.read());
+  }
+
+  @GetMapping("/branding")
+  public BrandingView branding() {
+    return new BrandingView(productName, productSubtitle, logoText, logoUrl, faviconUrl);
   }
 
   @PutMapping
@@ -55,5 +77,13 @@ public class UiSettingsController {
       String defaultLanguage,
       List<String> supportedDefaultLanguages,
       Instant updatedAt) {
+  }
+
+  public record BrandingView(
+      String productName,
+      String productSubtitle,
+      String logoText,
+      String logoUrl,
+      String faviconUrl) {
   }
 }
