@@ -4,7 +4,7 @@
 
 ## 当前支持状态
 
-Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group 仓库。本文继续作为协议兼容设计和验证说明使用。Cargo 仓库迁移能力当前为待定项，第一阶段暂不实现。
+Cargo / Rust 仓库能力已实现，覆盖 hosted、proxy 和 group 仓库。本文继续作为协议兼容设计和验证说明使用，也覆盖 Nexus datastore 时代 Cargo 迁移。
 
 第一阶段支持：
 
@@ -18,7 +18,7 @@ Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group
 - Cargo token 认证、匿名/读/写权限、CI token 发布。
 - 面向 Nexus 参考实例的 Cargo 黑盒兼容性测试，以及真实 `cargo` 客户端验证。
 
-当前不支持 Cargo git index 协议、crates.io 风格 GitHub owner 邀请、删除已发布 crate version，以及 Nexus Cargo 仓库迁移。`cargo search` 原生搜索和 kkrepo 自有 UI/API `.crate` 上传已作为产品增强落地，不作为 Nexus 兼容要求；Nexus 原生 Cargo 支持也以 sparse protocol 为主，并明确不支持 Cargo 客户端原生搜索和 UI/API 上传组件。Cargo 迁移预研保持待定；Cargo git index、crates.io 风格 GitHub owner 邀请和删除已发布 crate version 明确不实现。
+当前不支持 Cargo git index 协议、crates.io 风格 GitHub owner 邀请、删除已发布 crate version。`cargo search` 原生搜索和 kkrepo 自有 UI/API `.crate` 上传已作为产品增强落地，不作为 Nexus 兼容要求；Nexus 原生 Cargo 支持也以 sparse protocol 为主，并明确不支持 Cargo 客户端原生搜索和 UI/API 上传组件。对于 source profile 已证明 Cargo content model 的 Nexus datastore 时代源端，Cargo hosted 仓库迁移已支持；Cargo git index、crates.io 风格 GitHub owner 邀请和删除已发布 crate version 明确不实现。
 
 ## 调研基线
 
@@ -31,7 +31,7 @@ Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group
 - Cargo Book: Source Replacement。source replacement 要求替换源和原始源内容等价；混合私有包和 crates.io proxy 时，应优先作为 alternate registry 使用，不能假装是 crates.io 的精确镜像。
 - Nexus Repository Rust / Cargo 文档。Nexus 支持 hosted、proxy、group Cargo 仓库，仅支持 sparse protocol；proxy remote URL 需要保留尾部 `/`；Cargo 版本要求 1.68+；支持 yank/unyank。
 - Nexus Repository 3.73.0 与 3.77.0 release notes。3.73.0 是 Pro-only 原生 Rust / Cargo 初始支持，官方同时说明原生 Cargo 与旧 community plugin 不兼容，且 data migration 不支持；3.77.0 才随 Community Edition 把 previously Pro-only formats 正式放出来。kkrepo 后续兼容基线应以 3.77.0+ 参考实例为主。
-- Nexus Repository 当前数据库形态。3.71.0 及以上不再支持 OrientDB，当前支持 embedded H2 和 external PostgreSQL。kkrepo 现有 Nexus 迁移链路主要围绕旧 OrientDB / Script REST API 补偿路径设计，不能直接假设适用于 3.77.0+ Cargo 数据。
+- Nexus Repository 当前数据库形态。3.71.0 及以上不再支持 OrientDB，当前支持 embedded H2 和 external PostgreSQL。Cargo 迁移必须依赖 datastore H2/PostgreSQL schema 指纹；无法证明 content model 时默认 fail closed。
 
 关键结论：
 
@@ -90,16 +90,16 @@ Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group
    - 验证 `.cargo/config.toml` 中 alternate registry 和 source replacement 两种配置，文档中明确二者适用边界。
    - 需要把 Cargo 变更纳入全仓库真实客户端矩阵时，运行 `scripts/ci/run-live-compat.sh client-e2e`。
 
-### 已落地增强、待定项和非目标
+### 已落地增强、迁移范围和非目标
 
 已落地增强：
 
 - `cargo search` 原生搜索。已实现 Cargo Registry Web API 的 `GET /api/v1/crates`，hosted 查询当前仓库，proxy 优先转发上游 API，group 聚合成员结果。该能力是 kkrepo 的产品增强，不要求和 Nexus 对齐，因为 Nexus 明确不支持 Cargo 客户端原生搜索。
 - kkrepo 自有 UI/API `.crate` 上传。已支持 hosted Cargo 仓库通过管理面/API 上传单个 `.crate` 文件，并复用 hosted publish 的 crate 校验、metadata/index 生成、checksum、MySQL 事务、blob 写入、权限判定、审计和错误语义，避免 UI/API 上传和 Cargo 客户端发布出现两套行为。
 
-待定项：
+迁移范围：
 
-- Cargo 迁移预研保持待定，第一阶段暂不实现 Nexus Cargo 仓库迁移。后续如果启动，需要先在 Nexus 3.77.0+ 参考实例确认 H2/PostgreSQL 源端读取、官方/非公开 API 可用性、sparse index、blob metadata、token/User Token 存储、权限映射、checksum 校验和切换验证方案。
+- Nexus datastore H2/PostgreSQL Cargo hosted 迁移只在 preflight 证明源端读取、sparse index、blob metadata、checksum 校验、yanked 状态、token/User Token 处理、权限映射和切换验证边界后启用。
 
 明确不实现：
 
@@ -334,11 +334,11 @@ Browse UI：
 
 迁移：
 
-- Nexus Cargo 仓库迁移能力待定，第一阶段暂不实现，也不在 UI 或文档中承诺可迁移。
+- Nexus datastore H2/PostgreSQL Cargo hosted 迁移在 source profile 将仓库 plan item 标记为 `FULL` 时支持；未知源端形态必须在 UI 和文档中保持阻断。
 - 背景：Nexus Repository Pro 3.73.0 已有 Pro-only 原生 Cargo 初始支持，但 3.77.0 才随 Community Edition 正式放出 previously Pro-only formats。此时 Nexus 已进入 H2/PostgreSQL 数据库形态；现有面向旧 Nexus 的 OrientDB / Script REST API 迁移补偿路径不能直接复用。
-- 后续如果启动 Cargo 迁移，需要先在 Nexus 3.77.0+ 参考实例上确认源数据可读入口：官方 REST API、数据库导出、blob metadata、sparse index、token/user-token 存储和权限映射。
-- 后续迁移设计必须支持 dry-run、resume、checksum 校验和报告，并明确 H2 与 PostgreSQL 两种源端数据库的读取策略。
-- 后续 Cargo token 迁移必须在 Nexus 参考实例中创建该版本 Nexus Cargo 支持的所有 token/credential 形态，迁移到 kkrepo 后，原 `.cargo/config.toml` 和 `credentials.toml` 中的 token 不重新生成、不手工替换，`cargo fetch`、`cargo publish`、`cargo yank` 和 `cargo yank --undo` 仍应按原权限成功或失败。
+- Cargo 迁移需要在 Nexus 3.77.0+ 参考实例上确认源数据可读入口：官方 REST API、数据库导出、blob metadata、sparse index、token/user-token 存储和权限映射。
+- 迁移设计必须支持 dry-run、resume、checksum 校验和报告，并明确 H2 与 PostgreSQL 两种源端数据库的读取策略。
+- Cargo token 迁移必须在 Nexus 参考实例中创建该版本 Nexus Cargo 支持的所有 token/credential 形态，迁移到 kkrepo 后，原 `.cargo/config.toml` 和 `credentials.toml` 中的 token 不重新生成、不手工替换，`cargo fetch`、`cargo publish`、`cargo yank` 和 `cargo yank --undo` 仍应按原权限成功或失败。
 - 如果未来发现任何 Nexus 已支持的 Cargo token 不能自动迁移并继续使用，Cargo 迁移验收应失败；只能在报告中标记明确的 `MANUAL` 阻塞项，不能静默降级为“迁移后重新签发”。
 - 对 Nexus 文档明确不兼容的旧 community plugin 数据，不承诺自动迁移；如果用户有需求，应单独做源数据分析和一次性转换方案。
 - 迁移状态写入 MySQL，不使用本地文件作为唯一 checkpoint。
@@ -418,14 +418,14 @@ Browse UI：
 - index 请求支持 `ETag` 或 `Last-Modified`，客户端条件请求能得到 `304`。
 - publish/yank 后多副本读取新 index 不依赖本地进程状态。
 - Proxy 远端 404/410/451、远端 304、checksum mismatch、网络失败都有明确测试。
-- 第一阶段不提供 Nexus Cargo 仓库迁移能力；迁移页面、兼容矩阵和 release note 不能把 Cargo 标记为可迁移。
+- Nexus datastore H2/PostgreSQL Cargo hosted 迁移在 plan item 为 `FULL` 时保留 sparse index entry、`.crate` 下载、checksum 和 yanked 状态。
 - Nexus reference 兼容测试记录所有已知差异，并只在协议允许的位置规范化 host、timestamp 或 header 顺序。
 
 增强验收：
 
 - `cargo search --registry <name>` 能通过 kkrepo Cargo hosted/proxy/group 返回 Cargo 客户端可展示的搜索结果；hosted/group 结果不越过仓库权限边界，proxy 优先上游 API 避免未缓存包漏搜，并有测试覆盖空结果、分页和权限过滤。
 - UI/API `.crate` 上传与 `cargo publish` 共享同一套校验、checksum、metadata/index 写入、权限和审计路径；同一 crate version 通过两种入口发布后的 index 和下载行为一致，且不会绕过 hosted 仓库 write policy。
-- Cargo 迁移仍为待定，只有完成 Nexus 3.77.0+ H2/PostgreSQL 源端数据、token、权限和 blob 校验预研后，才能进入单独迁移设计。
+- Cargo 迁移必须保持 plan-gated；如果 Nexus H2/PostgreSQL 源端数据、token、权限、checksum 或 blob 指纹发生漂移，preflight 应将对应仓库或区域标记为 unsupported，而不是猜测迁移。
 
 ## 参考资料
 

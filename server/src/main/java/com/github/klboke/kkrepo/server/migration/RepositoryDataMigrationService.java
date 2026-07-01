@@ -6,9 +6,13 @@ import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
+import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder;
+import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder.MigrationScope;
+import com.github.klboke.kkrepo.migration.nexus.NexusMigrationPlan;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
+import com.github.klboke.kkrepo.migration.nexus.NexusSourceProfile;
 import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDataMigrationDao;
@@ -67,10 +71,18 @@ class RepositoryDataMigrationService {
         request.sourceUsername(),
         request.sourcePassword(),
         objectMapper).readInventory();
+    NexusSourceProfile sourceProfile = NexusSourceProfile.fromInventory(inventory, request.sourceNexusVersion());
+    NexusMigrationPlan migrationPlan = new MigrationPlanBuilder().build(
+        sourceProfile,
+        new MigrationScope(
+            requestedScope(request.repositories(), request.backupProxyRepositories()),
+            true,
+            !normalizeNames(request.backupProxyRepositories()).isEmpty()));
     List<SourceRepository> sourceRepositories = sourceRepositories(
         inventory,
         request.repositories(),
-        request.backupProxyRepositories());
+        request.backupProxyRepositories(),
+        migrationPlan);
     if (sourceRepositories.isEmpty()) {
       throw new IllegalArgumentException("No supported source repositories matched the request");
     }
@@ -85,9 +97,9 @@ class RepositoryDataMigrationService {
 
     long jobId = transactionTemplate.execute(status -> {
       long createdJobId = migrationJobDao.create(
-          defaultString(request.sourceNexusVersion(), DEFAULT_NEXUS_VERSION),
+          resolvedSourceNexusVersion(sourceProfile, request),
           request.sourceBaseUrl(),
-          jobOptions(request, pageSize, concurrency, checksumValidation, sourceRepositories));
+          jobOptions(request, pageSize, concurrency, checksumValidation, sourceRepositories, sourceProfile, migrationPlan));
       for (SourceRepository source : sourceRepositories) {
         RepositoryRecord target = targets.get(source.name());
         migrationDao.createRepositoryJob(
@@ -116,6 +128,14 @@ class RepositoryDataMigrationService {
     return status(jobId);
   }
 
+  static String resolvedSourceNexusVersion(
+      NexusSourceProfile sourceProfile,
+      RepositoryDataMigrationRequest request) {
+    return defaultString(
+        sourceProfile == null ? null : sourceProfile.nexusVersion(),
+        defaultString(request == null ? null : request.sourceNexusVersion(), DEFAULT_NEXUS_VERSION));
+  }
+
   RepositoryDataMigrationStatus status(long jobId) {
     MigrationJobRecord job = migrationJobDao.findById(jobId)
         .orElseThrow(() -> new IllegalArgumentException("migration job not found: " + jobId));
@@ -136,6 +156,11 @@ class RepositoryDataMigrationService {
         packageMigrationEnabled(job),
         progress.active(),
         progress.failedRepositories(),
+        string(job.options() == null ? null : job.options().get("sourceAdapter")),
+        string(job.options() == null ? null : job.options().get("profileHash")),
+        string(job.options() == null ? null : job.options().get("planHash")),
+        job.options() == null ? null : job.options().get("sourceProfile"),
+        job.options() == null ? null : job.options().get("migrationPlan"),
         repositories.stream()
             .map(RepositoryDataMigrationService::repositoryStatus)
             .toList());
@@ -177,7 +202,8 @@ class RepositoryDataMigrationService {
   private List<SourceRepository> sourceRepositories(
       NexusInventory inventory,
       List<String> requestedRepositories,
-      List<String> backupProxyRepositories) {
+      List<String> backupProxyRepositories,
+      NexusMigrationPlan migrationPlan) {
     LinkedHashMap<String, SourceRepository> sourcesByName = new LinkedHashMap<>();
     for (RepositoryDocument document : inventory.repositories()) {
       SourceRepository source = sourceRepository(document);
@@ -190,6 +216,7 @@ class RepositoryDataMigrationService {
     if (requestedHosted.isEmpty()) {
       sourcesByName.values().stream()
           .filter(source -> source.type() == RepositoryType.HOSTED && source.supported())
+          .filter(source -> planAllowsRepositoryData(source.name(), migrationPlan))
           .sorted(Comparator.comparing(SourceRepository::name))
           .map(source -> source.withMigrationMode(MODE_HOSTED))
           .forEach(source -> selected.put(source.name(), source));
@@ -203,6 +230,8 @@ class RepositoryDataMigrationService {
           invalid.add(name + " (" + source.type().name().toLowerCase(Locale.ROOT) + ")");
         } else if (!source.supported()) {
           invalid.add(name + " (unsupported format " + source.format().id() + ")");
+        } else if (!planAllowsRepositoryData(source.name(), migrationPlan)) {
+          invalid.add(name + " (" + planRepositoryStatus(name, migrationPlan) + ")");
         } else {
           selected.put(source.name(), source.withMigrationMode(MODE_HOSTED));
         }
@@ -221,6 +250,8 @@ class RepositoryDataMigrationService {
         invalid.add(name + " (" + source.type().name().toLowerCase(Locale.ROOT) + ")");
       } else if (!source.supported()) {
         invalid.add(name + " (unsupported format " + source.format().id() + ")");
+      } else if (!planAllowsRepositoryData(source.name(), migrationPlan)) {
+        invalid.add(name + " (" + planRepositoryStatus(name, migrationPlan) + ")");
       } else {
         selected.put(source.name(), source.withMigrationMode(MODE_PROXY_BACKUP));
       }
@@ -229,6 +260,27 @@ class RepositoryDataMigrationService {
       throw new IllegalArgumentException("Backup proxy repositories are invalid: " + invalid);
     }
     return List.copyOf(selected.values());
+  }
+
+  private static boolean planAllowsRepositoryData(String repositoryName, NexusMigrationPlan migrationPlan) {
+    if (migrationPlan == null) {
+      return true;
+    }
+    return migrationPlan.items().stream()
+        .anyMatch(item -> "repository".equals(item.area())
+            && repositoryName.equals(item.name())
+            && item.status() == NexusMigrationPlan.SupportStatus.FULL);
+  }
+
+  private static String planRepositoryStatus(String repositoryName, NexusMigrationPlan migrationPlan) {
+    if (migrationPlan == null) {
+      return "migration plan unavailable";
+    }
+    return migrationPlan.items().stream()
+        .filter(item -> "repository".equals(item.area()) && repositoryName.equals(item.name()))
+        .map(item -> "plan status " + item.status())
+        .findFirst()
+        .orElse("not in migration plan");
   }
 
   private Map<String, RepositoryRecord> targetRepositories(List<SourceRepository> sourceRepositories) {
@@ -288,7 +340,9 @@ class RepositoryDataMigrationService {
       int pageSize,
       int concurrency,
       boolean checksumValidation,
-      List<SourceRepository> repositories) {
+      List<SourceRepository> repositories,
+      NexusSourceProfile sourceProfile,
+      NexusMigrationPlan migrationPlan) {
     SecretCipher cipher = new SecretCipher(EncryptionSecrets.credentialSecret());
     LinkedHashMap<String, Object> options = new LinkedHashMap<>();
     options.put("scope", "repository-data");
@@ -302,6 +356,11 @@ class RepositoryDataMigrationService {
     options.put("repositories", repositories.stream().map(SourceRepository::name).toList());
     options.put("requestedRepositories", normalizeNames(request.repositories()));
     options.put("backupProxyRepositories", normalizeNames(request.backupProxyRepositories()));
+    options.put("sourceAdapter", migrationPlan.adapter());
+    options.put("profileHash", migrationPlan.profileHash());
+    options.put("planHash", migrationPlan.planHash());
+    options.put("sourceProfile", sourceProfile);
+    options.put("migrationPlan", migrationPlan);
     if (request.metadataSince() != null) {
       options.put("metadataSince", request.metadataSince().toString());
     }
@@ -333,8 +392,7 @@ class RepositoryDataMigrationService {
     if (name == null || format == null || type == null) {
       return null;
     }
-    boolean supported = format != RepositoryFormat.CARGO
-        && RepositoryRecipes.byName(format.id() + "-" + type.name().toLowerCase(Locale.ROOT)).isPresent();
+    boolean supported = RepositoryRecipes.byName(format.id() + "-" + type.name().toLowerCase(Locale.ROOT)).isPresent();
     return new SourceRepository(name, format, type, supported, summary, null);
   }
 
@@ -381,6 +439,12 @@ class RepositoryDataMigrationService {
     return value == null || value.isBlank() ? fallback : value.trim();
   }
 
+  private static void putIfNotNull(Map<String, Object> target, String key, Object value) {
+    if (value != null) {
+      target.put(key, value);
+    }
+  }
+
   private static boolean packageMigrationEnabled(MigrationJobRecord job) {
     Object value = job.options() == null ? null : job.options().get("packageMigrationEnabled");
     return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
@@ -414,6 +478,11 @@ class RepositoryDataMigrationService {
       boolean packageMigrationEnabled,
       boolean active,
       boolean failedRepositories,
+      String sourceAdapter,
+      String profileHash,
+      String planHash,
+      Object sourceProfile,
+      Object migrationPlan,
       List<RepositoryDataMigrationRepositoryStatus> repositoryJobs) {
 
     Map<String, Object> toSummary(String effectiveStatus) {
@@ -421,6 +490,8 @@ class RepositoryDataMigrationService {
       summary.put("jobId", jobId);
       summary.put("status", effectiveStatus);
       summary.put("startedAt", startedAt);
+      summary.put("sourceNexusVersion", sourceNexusVersion);
+      summary.put("sourceBaseUrl", sourceBaseUrl);
       summary.put("repositories", repositories);
       summary.put("discoveredAssets", discoveredAssets);
       summary.put("totalAssets", totalAssets);
@@ -430,6 +501,11 @@ class RepositoryDataMigrationService {
       summary.put("packageMigrationEnabled", packageMigrationEnabled);
       summary.put("active", active);
       summary.put("failedRepositories", failedRepositories);
+      putIfNotNull(summary, "sourceAdapter", sourceAdapter);
+      putIfNotNull(summary, "profileHash", profileHash);
+      putIfNotNull(summary, "planHash", planHash);
+      putIfNotNull(summary, "sourceProfile", sourceProfile);
+      putIfNotNull(summary, "migrationPlan", migrationPlan);
       return Map.copyOf(summary);
     }
   }
@@ -474,5 +550,14 @@ class RepositoryDataMigrationService {
       }
     }
     return List.copyOf(normalized);
+  }
+
+  private static List<String> requestedScope(
+      List<String> repositories,
+      List<String> backupProxyRepositories) {
+    LinkedHashSet<String> scope = new LinkedHashSet<>();
+    scope.addAll(normalizeNames(repositories));
+    scope.addAll(normalizeNames(backupProxyRepositories));
+    return List.copyOf(scope);
   }
 }

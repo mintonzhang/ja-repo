@@ -16,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
@@ -129,6 +130,64 @@ class FileBlobStorageTest {
     assertTrue(Files.isDirectory(tempDir.resolve("repositories/maven-releases/blobs/v2/aa/bb/aabbdd")));
     assertTrue(Files.isRegularFile(tempDir.resolve(firstKey)));
     assertTrue(Files.isRegularFile(tempDir.resolve(secondKey)));
+  }
+
+  @Test
+  void putFileCreatesMissingShardParentsWhenDirectoryCacheRacesAhead() throws Exception {
+    String key = "repositories/docker-hosted/blobs/v2/bd/74/bd748bdf1590/object";
+    AtomicInteger createDirectoriesCalls = new AtomicInteger();
+    FileBlobDirectoryCache cache = new FileBlobDirectoryCache(directory -> {
+      createDirectoriesCalls.incrementAndGet();
+      return directory;
+    });
+    FileBlobStorage storage = new FileBlobStorage(
+        new FileBlobStoreConfig(1, "disk", "default", tempDir),
+        (repository, sha256) -> key,
+        cache);
+    Path source = tempDir.resolve("upload.bin");
+    Files.writeString(source, "manifest", StandardCharsets.UTF_8);
+
+    BlobReference reference = storage.putFile("docker-hosted", "v2/image/manifests/latest", source, "bd748bdf1590");
+
+    assertEquals(key, reference.objectKey());
+    assertEquals(1, createDirectoriesCalls.get());
+    assertTrue(Files.isRegularFile(tempDir.resolve(key)));
+  }
+
+  @Test
+  void putInputStreamCreatesMissingShardParentsWhenDirectoryCacheRacesAhead() throws Exception {
+    String key = "repositories/docker-hosted/blobs/v2/bd/74/bd748bdf1590/object";
+    AtomicInteger createDirectoriesCalls = new AtomicInteger();
+    FileBlobDirectoryCache cache = new FileBlobDirectoryCache(directory -> {
+      if (directory.endsWith(".tmp")) {
+        return Files.createDirectories(directory);
+      }
+      createDirectoriesCalls.incrementAndGet();
+      return directory;
+    });
+    FileBlobStorage storage = new FileBlobStorage(
+        new FileBlobStoreConfig(1, "disk", "default", tempDir),
+        (repository, sha256) -> key,
+        cache);
+    byte[] bytes = "manifest".getBytes(StandardCharsets.UTF_8);
+
+    BlobReference reference = storage.put(
+        "docker-hosted",
+        "v2/image/manifests/latest",
+        new ByteArrayInputStream(bytes),
+        bytes.length,
+        "bd748bdf1590");
+
+    assertEquals(key, reference.objectKey());
+    assertEquals(1, createDirectoriesCalls.get());
+    assertTrue(Files.isRegularFile(tempDir.resolve(key)));
+  }
+
+  @Test
+  void previousSingleDirectoryCreationWouldMissCachedShardParents() throws Exception {
+    Path digestDirectory = tempDir.resolve("repositories/docker-hosted/blobs/v2/bd/74/bd748bdf1590");
+
+    assertThrows(NoSuchFileException.class, () -> Files.createDirectory(digestDirectory));
   }
 
   @Test

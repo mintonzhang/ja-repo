@@ -243,7 +243,7 @@ public final class FileBlobStorage implements BlobStorage {
       return;
     }
     try {
-      Files.createDirectory(directory);
+      Files.createDirectories(directory);
     } catch (FileAlreadyExistsException e) {
       if (!Files.isDirectory(directory)) {
         throw e;

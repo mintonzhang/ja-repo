@@ -4,7 +4,7 @@ This document describes prerequisites, execution order, incremental migration, a
 
 kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
 
-Cargo / Rust repositories also use `/repository/<repo>/...` sparse registry URLs in kkrepo, but Nexus Cargo repository migration is currently TBD and is not part of the migration flow described here.
+Cargo / Rust repositories also use `/repository/<repo>/...` sparse registry URLs in kkrepo. Hosted Cargo repository data participates in the same migration flow for datastore-era Nexus H2/PostgreSQL sources when preflight proves the Cargo content model fingerprint.
 
 ## Migration Flow Overview
 
@@ -44,7 +44,7 @@ Repository data migration runs from the `Nexus Repository Data` page in the kkre
 1. Migrate repository metadata first: scan source Nexus hosted repository component, asset, path, size, content-type, timestamp, blob reference, and related metadata, then create migration tasks in kkrepo MySQL.
 2. Migrate real blob data: download source Nexus asset content according to migration tasks and write it to the target blob store in kkrepo.
 
-Cargo / Rust repository data is not migrated by this flow. Nexus Community Cargo support starts from the 3.77.x datastore-era H2/PostgreSQL model, which requires a separate source-reading and validation design before migration can be enabled.
+Cargo / Rust hosted repository data is migrated by this flow for Nexus 3.77.x+ datastore-era H2/PostgreSQL sources whose source profile reports a supported Cargo content model. Unknown datastore schema fingerprints fail closed in the migration plan, and old OrientDB-era sources do not enable Cargo content export.
 
 ### First Migration
 

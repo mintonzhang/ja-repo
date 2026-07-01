@@ -207,7 +207,7 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 - RubyGems install 和 gem push。
 - Yum install 和 RPM upload。
 - Raw upload/download。
-- Cargo / Rust 仓库迁移不属于当前迁移流程；只有通过本手册之外的方式创建或迁移 Cargo 仓库时，才单独验证 Cargo。
+- datastore H2/PostgreSQL Cargo 迁移后的 sparse registry config、index entry、`.crate` 下载和 checksum。
 - 管理员登录。
 - Browse/search。
 - 用户角色和仓库权限。

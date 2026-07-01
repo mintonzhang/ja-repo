@@ -3091,12 +3091,19 @@ function renderCompactTable(headers, rows, emptyText = "") {
       <tbody>
         ${rows.map((row) => `
           <tr>
-            ${headers.map((header) => `<td>${escapeHtml(header.value(row))}</td>`).join("")}
+            ${headers.map((header) => `<td>${migrationTableCell(header, row)}</td>`).join("")}
           </tr>
         `).join("")}
       </tbody>
     </table>
   `;
+}
+
+function migrationTableCell(header, row) {
+  if (header.html) {
+    return header.html(row);
+  }
+  return escapeHtml(header.value(row));
 }
 
 function renderMigrationSection(title, html) {
@@ -3113,6 +3120,83 @@ function renderMigrationList(title, values) {
   return renderMigrationSection(title, `<pre class="code-panel">${escapeHtml(items.join("\\n"))}</pre>`);
 }
 
+function migrationValues(...sources) {
+  return sources
+    .flatMap((source) => Array.isArray(source) ? source : [])
+    .filter((value) => value != null && String(value).trim())
+    .map((value) => String(value))
+    .filter((value, index, values) => values.indexOf(value) === index);
+}
+
+function renderMigrationProfile(profile, plan) {
+  if (!profile) return "";
+  const scriptApi = profile.scriptApi || {};
+  const blobModel = profile.blobModel || {};
+  return renderMigrationSection("Source profile", renderCompactTable([
+    { label: "Version", value: (source) => source.nexusVersion || "" },
+    { label: "Metadata", value: (source) => source.metadataEngine || "" },
+    { label: "Repository model", value: (source) => source.repositoryModel || "" },
+    { label: "Security model", value: (source) => source.securityModel || "" },
+    { label: "Script API", value: () => migrationScriptApiSummary(scriptApi) },
+    { label: "Script run type", value: () => scriptApi.runContentType || "" },
+    { label: "Blob read", value: () => blobModel.readMode || "" },
+    { label: "Blob types", value: () => (blobModel.sourceTypes || []).join(", ") || "-" },
+    { label: "Profile hash", html: () => renderMigrationHash(plan?.profileHash) }
+  ], [profile]));
+}
+
+function renderMigrationPlan(plan) {
+  if (!plan) return "";
+  return renderMigrationSection("Migration plan", renderCompactTable([
+    { label: "Adapter", value: (value) => value.adapter || "" },
+    { label: "Profile hash", html: (value) => renderMigrationHash(value.profileHash) },
+    { label: "Plan hash", html: (value) => renderMigrationHash(value.planHash) },
+    { label: "Plan items", value: (value) => (value.items || []).length },
+    { label: "Warnings", value: (value) => (value.warnings || []).length },
+    { label: "Manual actions", value: (value) => (value.manualActions || []).length }
+  ], [plan]));
+}
+
+function renderMigrationPlanItems(plan) {
+  const items = plan?.items || [];
+  return renderMigrationSection("Plan items", renderCompactTable([
+    { label: "Area", value: (item) => item.area || "" },
+    { label: "Name", value: (item) => item.name || "" },
+    { label: "Format", value: (item) => item.format || "" },
+    { label: "Type", value: (item) => item.type || "" },
+    { label: "Status", html: (item) => migrationPlanStatusBadge(item.status) },
+    { label: "Source adapter", value: (item) => item.sourceAdapter || "" },
+    { label: "Format adapter", value: (item) => item.formatAdapter || "" },
+    { label: "Read mode", value: (item) => item.readMode || "" },
+    { label: "Write mode", value: (item) => item.writeMode || "" },
+    { label: "Checksum", value: (item) => item.checksumMode || "" },
+    { label: "Resume key", value: (item) => item.resumeKey || "" },
+    { label: "Reasons", value: (item) => (item.reasons || []).join("; ") || "-" },
+    { label: "Warnings", value: (item) => (item.warnings || []).join("; ") || "-" }
+  ], items));
+}
+
+function migrationScriptApiSummary(scriptApi) {
+  const status = scriptApi.status || "unknown";
+  const runnable = scriptApi.runnable ? "runnable" : "not runnable";
+  const cleanup = scriptApi.deletedAfterProbe ? "deleted" : "not deleted";
+  return `${status}; ${runnable}; ${cleanup}`;
+}
+
+function migrationPlanStatusBadge(status) {
+  const value = String(status || "-");
+  const tone = value === "FULL" ? "ok"
+    : value === "CONFIG_ONLY" || value === "DATA_ONLY" ? "warn"
+      : value === "UNSUPPORTED" || value === "NEEDS_MANUAL_ACTION" ? "bad" : "checking";
+  return `<span class="state-badge compact ${tone}">${escapeHtml(value)}</span>`;
+}
+
+function renderMigrationHash(value) {
+  const hash = String(value || "");
+  if (!hash) return '<span class="health-muted">-</span>';
+  return `<code class="migration-hash-cell" title="${escapeHtml(hash)}">${escapeHtml(shortText(hash, 18))}</code>`;
+}
+
 function renderMigrationResult(payload, title) {
   const result = document.getElementById("migration-result");
   const preflight = payload.preflight || payload;
@@ -3124,16 +3208,19 @@ function renderMigrationResult(payload, title) {
   const groupRepositories = preflight.groupRepositories || [];
   const unsupported = preflight.unsupported || [];
   const proxyRisks = preflight.proxyRemoteRisks || [];
+  const sourceProfile = preflight.sourceProfile || payload.sourceProfile || null;
+  const migrationPlan = preflight.migrationPlan || payload.migrationPlan || null;
   const passwordUsers = payload.passwordResetRequiredUsers || preflight.passwordResetRequiredUsers || [];
-  const warnings = preflight.warnings || payload.warnings || [];
+  const warnings = migrationValues(preflight.warnings, payload.warnings, migrationPlan?.warnings);
   const validation = payload.validation || {};
   const validationChecks = validation.checks || [];
-  const manualActions = validation.manualActions || [];
+  const manualActions = migrationValues(validation.manualActions, migrationPlan?.manualActions);
   result.hidden = false;
   result.innerHTML = `
     <div class="form-title">${escapeHtml(title)}</div>
     <div class="summary-grid">
       <div><span>Status</span><strong>${escapeHtml(payload.status || "preflight")}</strong></div>
+      <div><span>Plan items</span><strong>${escapeHtml(migrationPlan?.items?.length ?? 0)}</strong></div>
       <div><span>Blob stores</span><strong>${escapeHtml(config.blobStores ?? preflight.blobStores ?? 0)}</strong></div>
       <div><span>Repositories</span><strong>${escapeHtml(config.repositories ?? preflight.supportedRepositories ?? 0)}</strong></div>
       <div><span>Unsupported</span><strong>${escapeHtml(config.unsupportedRepositories ?? preflight.unsupportedRepositories ?? 0)}</strong></div>
@@ -3144,6 +3231,9 @@ function renderMigrationResult(payload, title) {
       <div><span>API keys</span><strong>${escapeHtml(apiSecurity?.apiKeys ?? security.apiKeys ?? 0)}</strong></div>
       <div><span>Password resets</span><strong>${escapeHtml(passwordUsers.length)}</strong></div>
     </div>
+    ${renderMigrationProfile(sourceProfile, migrationPlan)}
+    ${renderMigrationPlan(migrationPlan)}
+    ${renderMigrationPlanItems(migrationPlan)}
     ${renderMigrationList("Warnings", warnings)}
     ${renderMigrationSection("Blob stores", renderCompactTable([
       { label: "Source", value: (store) => store.sourceName || "" },
@@ -3326,6 +3416,8 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
     : numberOrZero(payload.pendingAssets);
   const packagePercent = progressPercent(completedAssets, totalAssets);
   const phase = repositoryDataMigrationPhase(payload, jobs, totalAssets, completedAssets);
+  const sourceProfile = payload.sourceProfile || null;
+  const migrationPlan = payload.migrationPlan || null;
   result.hidden = false;
   result.innerHTML = `
     <div class="form-title">${escapeHtml(title)}</div>
@@ -3334,6 +3426,7 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
       <div><span>Status</span><strong>${escapeHtml(payload.status || "-")}</strong></div>
       <div><span>Started</span><strong>${escapeHtml(formatDateTime(payload.startedAt))}</strong></div>
       <div><span>Phase</span><strong>${escapeHtml(phase)}</strong></div>
+      <div><span>Plan items</span><strong>${escapeHtml(migrationPlan?.items?.length ?? 0)}</strong></div>
       <div><span>Repositories</span><strong>${escapeHtml(payload.repositories ?? jobs.length)}</strong></div>
       <div><span>Discovered</span><strong>${escapeHtml(compactNumber(payload.discoveredAssets))}</strong></div>
       <div><span>Total packages</span><strong>${escapeHtml(compactNumber(totalAssets))}</strong></div>
@@ -3354,6 +3447,11 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
         <span>${escapeHtml(compactNumber(failedAssets))} failed</span>
       </div>
     </div>
+    ${renderMigrationProfile(sourceProfile, migrationPlan)}
+    ${renderMigrationPlan(migrationPlan)}
+    ${renderMigrationPlanItems(migrationPlan)}
+    ${renderMigrationList("Plan manual actions", migrationPlan?.manualActions || [])}
+    ${renderMigrationList("Plan warnings", migrationPlan?.warnings || [])}
     ${jobs.length ? `
       <div class="migration-list-title">Repository jobs</div>
       <table class="nx-table compact"><thead><tr><th>Repository</th><th>Format</th><th>Status</th><th>Total</th><th>Migrated</th><th>Pending</th><th>Failed</th><th>Progress</th><th>Cursor</th><th>Error</th></tr></thead><tbody>

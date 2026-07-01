@@ -185,7 +185,7 @@ export SPRING_DATASOURCE_PASSWORD=kkrepo
 - 源 Nexus 凭据权限不足。
 - 源 Nexus 无法暴露本地用户密码 hash；这些用户需要重置密码。
 - 期望迁移 proxy 仓库，但没有在 `Optional proxy repositories` 中列出。
-- Cargo / Rust 仓库迁移当前不属于现有迁移流程支持范围。
+- Cargo / Rust 迁移被阻断，通常是因为 preflight 未证明受支持的 datastore Cargo content model；请查看 Source Profile 和对应 plan item 状态。
 - blob 迁移慢，可能是并发过低、源 Nexus 压力过大，或对象存储限流。
 
 详见 [Nexus 迁移说明](nexus-migration-guide.md)。

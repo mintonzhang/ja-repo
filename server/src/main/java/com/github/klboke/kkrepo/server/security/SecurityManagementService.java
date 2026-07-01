@@ -79,6 +79,7 @@ public class SecurityManagementService implements AccessDecisionService {
   private final SecurityDao securityDao;
   private final SecurityAuthorizationCache authorizationCache;
   private final ApiKeyAuthCache apiKeyAuthCache;
+  private final BasicAuthCache basicAuthCache;
   private final SecurityCatalogCache securityCatalogCache;
 
   public SecurityManagementService(SecurityDao securityDao) {
@@ -93,7 +94,15 @@ public class SecurityManagementService implements AccessDecisionService {
       SecurityDao securityDao,
       SecurityAuthorizationCache authorizationCache,
       ApiKeyAuthCache apiKeyAuthCache) {
-    this(securityDao, authorizationCache, apiKeyAuthCache, null);
+    this(securityDao, authorizationCache, apiKeyAuthCache, null, null);
+  }
+
+  public SecurityManagementService(
+      SecurityDao securityDao,
+      SecurityAuthorizationCache authorizationCache,
+      ApiKeyAuthCache apiKeyAuthCache,
+      SecurityCatalogCache securityCatalogCache) {
+    this(securityDao, authorizationCache, apiKeyAuthCache, null, securityCatalogCache);
   }
 
   @Autowired
@@ -101,10 +110,12 @@ public class SecurityManagementService implements AccessDecisionService {
       SecurityDao securityDao,
       SecurityAuthorizationCache authorizationCache,
       ApiKeyAuthCache apiKeyAuthCache,
+      BasicAuthCache basicAuthCache,
       SecurityCatalogCache securityCatalogCache) {
     this.securityDao = securityDao;
     this.authorizationCache = authorizationCache;
     this.apiKeyAuthCache = apiKeyAuthCache;
+    this.basicAuthCache = basicAuthCache;
     this.securityCatalogCache = securityCatalogCache;
   }
 
@@ -774,7 +785,7 @@ public class SecurityManagementService implements AccessDecisionService {
         command.expiresAt(),
         null);
     securityDao.upsertApiKey(record);
-    evictApiKeyAuthCacheAfterCommit();
+    evictAuthCachesAfterCommit();
     ApiKeyView view = securityDao.findApiKey(domain, ownerSource, ownerUserId)
         .map(this::toApiKeyView)
         .orElseThrow();
@@ -845,7 +856,7 @@ public class SecurityManagementService implements AccessDecisionService {
     if (removed == 0) {
       throw new SecurityValidationException("API key not found: " + id);
     }
-    evictApiKeyAuthCacheAfterCommit();
+    evictAuthCachesAfterCommit();
   }
 
   @Transactional
@@ -1331,7 +1342,7 @@ public class SecurityManagementService implements AccessDecisionService {
     if (securityCatalogCache != null) {
       securityCatalogCache.refreshAfterCommit();
     }
-    evictApiKeyAuthCacheAfterCommit();
+    evictAuthCachesAfterCommit();
   }
 
   private Optional<SecurityCatalog> currentSecurityCatalog() {
@@ -1342,30 +1353,39 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   /**
-   * Drop every cached api-key {@link AuthenticatedSubject}. Called after security mutations that
-   * could change a cached subject's identity, role list, or privilege grants: user/role/privilege
-   * changes, content-selector changes, and api-key revocation or reset. Without this, a revoked or
-   * downgraded subject keeps authenticating until the cache TTL elapses (default 60s).
+   * Drop every cached {@link AuthenticatedSubject}. Called after security mutations that could
+   * change a cached subject's identity, password hash, role list, or privilege grants: user/role/
+   * privilege changes, content-selector changes, and api-key revocation or reset. Without this, a
+   * revoked, downgraded, or password-rotated subject keeps authenticating until the cache TTL elapses.
    *
-   * <p>Bulk eviction is used because cache entries are keyed by sha256(presentedToken) and a
-   * single api-key can be presented in several forms (raw, domain-prefixed, b64), each producing a
-   * different key. Building a reverse index is more complexity than warranted for these
-   * comparatively infrequent admin operations.
+   * <p>Bulk eviction is used because cache entries are keyed by presented secret material: api-key
+   * auth uses sha256(presentedToken), and Basic auth uses HMAC(username + password). Building a
+   * reverse index is more complexity than warranted for these comparatively infrequent admin
+   * operations.
    */
-  private void evictApiKeyAuthCacheAfterCommit() {
-    if (apiKeyAuthCache == null) {
+  private void evictAuthCachesAfterCommit() {
+    if (apiKeyAuthCache == null && basicAuthCache == null) {
       return;
     }
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      apiKeyAuthCache.evictAll();
+      evictAuthCaches();
       return;
     }
     TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
       @Override
       public void afterCommit() {
-        apiKeyAuthCache.evictAll();
+        evictAuthCaches();
       }
     });
+  }
+
+  private void evictAuthCaches() {
+    if (apiKeyAuthCache != null) {
+      apiKeyAuthCache.evictAll();
+    }
+    if (basicAuthCache != null) {
+      basicAuthCache.evictAll();
+    }
   }
 
   private static boolean wildcardMatches(String granted, String requested) {

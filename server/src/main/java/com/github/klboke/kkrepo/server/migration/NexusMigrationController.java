@@ -13,10 +13,13 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
+import com.github.klboke.kkrepo.server.security.ApiKeyAuthCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.BasicAuthCache;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache;
 import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
@@ -60,6 +63,9 @@ public class NexusMigrationController {
   private final BlobStorageRegistry blobStorageRegistry;
   private final SecurityCatalogCache securityCatalogCache;
   private final SecurityAuthorizationCache securityAuthorizationCache;
+  private final ApiKeyAuthCache apiKeyAuthCache;
+  private final BasicAuthCache basicAuthCache;
+  private final DockerConnectorRuntime dockerConnectorRuntime;
 
   public NexusMigrationController(
       ObjectMapper objectMapper,
@@ -75,7 +81,10 @@ public class NexusMigrationController {
       RepositoryRuntimeRegistry runtimeRegistry,
       BlobStorageRegistry blobStorageRegistry,
       SecurityCatalogCache securityCatalogCache,
-      SecurityAuthorizationCache securityAuthorizationCache) {
+      SecurityAuthorizationCache securityAuthorizationCache,
+      ApiKeyAuthCache apiKeyAuthCache,
+      BasicAuthCache basicAuthCache,
+      DockerConnectorRuntime dockerConnectorRuntime) {
     this.objectMapper = objectMapper;
     this.blobStoreDao = blobStoreDao;
     this.repositoryDao = repositoryDao;
@@ -90,6 +99,9 @@ public class NexusMigrationController {
     this.blobStorageRegistry = blobStorageRegistry;
     this.securityCatalogCache = securityCatalogCache;
     this.securityAuthorizationCache = securityAuthorizationCache;
+    this.apiKeyAuthCache = apiKeyAuthCache;
+    this.basicAuthCache = basicAuthCache;
+    this.dockerConnectorRuntime = dockerConnectorRuntime;
   }
 
   @PostMapping("/preflight")
@@ -133,6 +145,15 @@ public class NexusMigrationController {
     }
     if (securityAuthorizationCache != null) {
       securityAuthorizationCache.invalidateAllAfterCommit();
+    }
+    if (apiKeyAuthCache != null) {
+      apiKeyAuthCache.evictAll();
+    }
+    if (basicAuthCache != null) {
+      basicAuthCache.evictAll();
+    }
+    if (dockerConnectorRuntime != null) {
+      dockerConnectorRuntime.sync();
     }
   }
 

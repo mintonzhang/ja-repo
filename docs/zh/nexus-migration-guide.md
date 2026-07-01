@@ -4,7 +4,7 @@
 
 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
 
-Cargo / Rust 在 kkrepo 中同样使用 `/repository/<repo>/...` sparse registry URL，但 Nexus Cargo 仓库迁移当前为待定，不属于本文描述的迁移流程。
+Cargo / Rust 在 kkrepo 中同样使用 `/repository/<repo>/...` sparse registry URL。对于 preflight 已确认 Cargo content model 指纹的 datastore 时代 Nexus H2/PostgreSQL 源端，hosted Cargo 仓库数据也走同一套迁移流程。
 
 ## 迁移流程概览
 
@@ -44,7 +44,7 @@ Cargo / Rust 在 kkrepo 中同样使用 `/repository/<repo>/...` sparse registry
 1. 先迁移仓库元数据：扫描源 Nexus hosted 仓库中的 component、asset、路径、大小、content-type、时间戳和 blob 引用等信息，在 kkrepo MySQL 中生成迁移任务。
 2. 再迁移 blob 真实数据：按迁移任务下载源 Nexus asset 内容，并写入 kkrepo 的目标 blob store。
 
-Cargo / Rust 仓库数据不通过此流程迁移。Nexus Community Cargo 支持从 3.77.x datastore 时代的 H2/PostgreSQL 模型开始，需要单独完成源端读取和校验设计后才能启用迁移。
+对于 source profile 已确认支持 Cargo content model 的 Nexus 3.77.x+ datastore 时代 H2/PostgreSQL 源端，Cargo / Rust hosted 仓库数据通过此流程迁移。未知 datastore schema 指纹会在迁移计划中 fail closed；旧 OrientDB 源端不会启用 Cargo 内容导出。
 
 ### 第一次迁移
 

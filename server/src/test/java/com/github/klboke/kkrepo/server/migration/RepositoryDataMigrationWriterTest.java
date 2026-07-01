@@ -25,6 +25,7 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
@@ -39,6 +40,7 @@ import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -51,6 +53,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -290,6 +295,61 @@ class RepositoryDataMigrationWriterTest {
     assertEquals(200L, result.assetId());
   }
 
+  @Test
+  @SuppressWarnings("unchecked")
+  void writeMigratedCargoCrateBuildsSparseIndexComponentMetadata() throws Exception {
+    byte[] crate = cargoCrate("cargo_demo", "0.1.0", """
+        [package]
+        name = "cargo_demo"
+        version = "0.1.0"
+        description = "Migrated Cargo package"
+        repository = "https://example.test/cargo_demo"
+
+        [dependencies]
+        serde = { version = "1", features = ["derive"] }
+        """);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    ComponentDao componentDao = mock(ComponentDao.class);
+    when(repositoryDao.findById(11L)).thenReturn(Optional.of(cargoRepository()));
+    when(componentDao.upsertReturningId(any())).thenReturn(501L);
+    RepositoryDataMigrationWriter writer = new RepositoryDataMigrationWriter(
+        repositoryDao,
+        componentDao,
+        new RecordingAssetDao(),
+        mock(BrowseNodeDao.class),
+        new FixedBlobStorageRegistry(new MemoryBlobStorage()),
+        mock(RepositoryIndexRebuildDao.class),
+        mock(DockerRegistryDao.class),
+        new DockerManifestParser(new ObjectMapper()),
+        new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
+
+    RepositoryDataMigrationWriter.WriteResult result = writer.write(
+        11L,
+        cargoSource("crates/cargo_demo/0.1.0/cargo_demo-0.1.0.crate", crate.length),
+        new ByteArrayInputStream(crate),
+        "application/x-tar",
+        true);
+
+    assertEquals(501L, result.componentId());
+    ArgumentCaptor<ComponentRecord> componentCaptor = ArgumentCaptor.forClass(ComponentRecord.class);
+    verify(componentDao).upsertReturningId(componentCaptor.capture());
+    ComponentRecord component = componentCaptor.getValue();
+    assertEquals(RepositoryFormat.CARGO, component.format());
+    assertEquals("cargo_demo", component.name());
+    assertEquals("0.1.0", component.version());
+    assertEquals("crate", component.kind());
+    assertEquals("crates/cargo_demo/0.1.0/cargo_demo-0.1.0.crate", component.attributes().get("cratePath"));
+    Map<String, Object> indexEntry = (Map<String, Object>) component.attributes().get("indexEntry");
+    assertEquals("cargo_demo", indexEntry.get("name"));
+    assertEquals("0.1.0", indexEntry.get("vers"));
+    assertEquals(false, indexEntry.get("yanked"));
+    assertEquals(64, String.valueOf(indexEntry.get("cksum")).length());
+    List<Map<String, Object>> deps = (List<Map<String, Object>>) indexEntry.get("deps");
+    assertEquals("serde", deps.get(0).get("name"));
+    assertEquals("1", deps.get(0).get("req"));
+    assertEquals(List.of("derive"), deps.get(0).get("features"));
+  }
+
   private static void assertChecksum(
       RepositoryDataMigrationWriter.GeneratedMavenChecksum checksum,
       String expectedPath,
@@ -326,6 +386,24 @@ class RepositoryDataMigrationWriterTest {
         Map.of());
   }
 
+  private static RepositoryRecord cargoRepository() {
+    return new RepositoryRecord(
+        11L,
+        "cargo-hosted",
+        RepositoryFormat.CARGO,
+        RepositoryType.HOSTED,
+        "cargo-hosted",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of());
+  }
+
   private static RepositoryDao mockRepositoryDao() {
     RepositoryDao repositoryDao = mock(RepositoryDao.class);
     when(repositoryDao.findById(10L)).thenReturn(Optional.of(dockerRepository()));
@@ -338,6 +416,41 @@ class RepositoryDataMigrationWriterTest {
 
   private static RepositoryDataMigrationAssetRecord dockerBlobSource(String path, int size) {
     return dockerSource(path, "BLOB", "application/octet-stream", size);
+  }
+
+  private static RepositoryDataMigrationAssetRecord cargoSource(String path, int size) {
+    Instant now = Instant.now();
+    return new RepositoryDataMigrationAssetRecord(
+        1L,
+        2L,
+        "cargo-asset-1",
+        "cargo-component-1",
+        path,
+        HashColumns.pathHash(path),
+        RepositoryFormat.CARGO,
+        null,
+        "cargo_demo",
+        "0.1.0",
+        "crate",
+        "application/x-tar",
+        (long) size,
+        "source-blob-ref",
+        now.minusSeconds(60),
+        null,
+        now.minusSeconds(120),
+        now.minusSeconds(60),
+        "nexus-admin",
+        "127.0.0.1",
+        null,
+        0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Map.of(),
+        now.minusSeconds(180));
   }
 
   private static RepositoryDataMigrationAssetRecord dockerSource(
@@ -402,6 +515,21 @@ class RepositoryDataMigrationWriterTest {
     } catch (NoSuchAlgorithmException e) {
       throw new AssertionError("Missing SHA-256", e);
     }
+  }
+
+  private static byte[] cargoCrate(String name, String version, String manifest) throws Exception {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (GzipCompressorOutputStream gzip = new GzipCompressorOutputStream(bytes);
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+      byte[] manifestBytes = manifest.getBytes(StandardCharsets.UTF_8);
+      TarArchiveEntry entry = new TarArchiveEntry(name + "-" + version + "/Cargo.toml");
+      entry.setSize(manifestBytes.length);
+      tar.putArchiveEntry(entry);
+      tar.write(manifestBytes);
+      tar.closeArchiveEntry();
+      tar.finish();
+    }
+    return bytes.toByteArray();
   }
 
   private static final class RecordingAssetDao extends AssetDao {

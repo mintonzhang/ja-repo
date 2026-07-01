@@ -58,14 +58,14 @@ Local hot-reload development and testing are documented in the [Development Guid
 | PyPI | hosted / proxy / group | twine upload and admin UI upload | simple index supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Go | proxy / group | Go module proxy is mainly read-only proxy; hosted upload is not supported | Supported | Proxy repositories can be migrated optionally |
 | Helm | hosted / proxy | chart push, PUT upload, and admin UI upload | index.yaml supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| Cargo / Rust | hosted / proxy / group | `cargo publish`, yank/unyank, `CargoToken` auth, and UI/API `.crate` upload | Sparse index and `cargo search` supported | Nexus Cargo repository migration is TBD |
+| Cargo / Rust | hosted / proxy / group | `cargo publish`, yank/unyank, `CargoToken` auth, and UI/API `.crate` upload | Sparse index and `cargo search` supported | Cargo repository migration is supported |
 | Docker / OCI | hosted / proxy / group | Registry V2 login, hosted push/pull, proxy pull, group pull, OCI referrers, cleanup, and connector-port access | Manifest/tag/blob metadata supported | Hosted Docker repository data migration is supported through the Nexus Repository Data flow |
 | NuGet | hosted / proxy / group | package push and admin UI upload | v3 service index / search supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | RubyGems | hosted / proxy / group | gem push/yank and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Yum | hosted / proxy / group | RPM upload and admin UI upload | repodata supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Raw | hosted / proxy / group | PUT upload and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 
-Repository data migration scans hosted repositories by default. If you need to migrate proxy repositories from a source Sonatype Nexus Repository deployment as historical backup data or upstream cache data, explicitly specify repository names in `Optional proxy repositories` on the migration page. Cargo / Rust repository data migration is not part of the current migration flow.
+Repository data migration scans hosted repositories by default. If you need to migrate proxy repositories from a source Sonatype Nexus Repository deployment as historical backup data or upstream cache data, explicitly specify repository names in `Optional proxy repositories` on the migration page. Cargo / Rust repository migration is supported.
 
 ## Migrating From Sonatype Nexus Repository
 
@@ -148,7 +148,7 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 Repository format roadmap:
 
 1. Docker / OCI Registry - Completed ([implementation notes](docs/en/dev/docker-repository-implementation-plan.md))
-2. Cargo / Rust - Repository support completed, including search and UI/API upload; migration TBD ([design notes](docs/en/dev/cargo-rust-repository-design.md))
+2. Cargo / Rust - Repository support completed, including search, UI/API upload, and migration ([design notes](docs/en/dev/cargo-rust-repository-design.md))
 3. APT / Debian
 4. Terraform Provider / Module Registry
 5. Conan

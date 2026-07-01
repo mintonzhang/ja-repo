@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.migration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDataMigrationDao;
@@ -21,6 +23,19 @@ class RepositoryDataMigrationWorkerTest {
 
     assertEquals(List.of(10L, 11L), targets.repositoryJobIds());
     assertEquals(List.of(100L), targets.jobIds());
+  }
+
+  @Test
+  void cargoDynamicConfigIsNotMigratedAsSourceBlob() {
+    assertFalse(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(RepositoryFormat.CARGO, "config.json"));
+    assertFalse(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(RepositoryFormat.CARGO, "/config.json"));
+    assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
+        RepositoryFormat.CARGO,
+        "crates/demo/0.1.0/download"));
+    assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
+        RepositoryFormat.CARGO,
+        "de/mo/demo"));
+    assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(RepositoryFormat.NPM, "config.json"));
   }
 
   private static AssetClaim claim(long repositoryJobId, long migrationJobId, String path) {

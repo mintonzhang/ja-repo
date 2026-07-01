@@ -21,10 +21,29 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
 
+  nexus-postgres:
+    image: postgres:16
+    profiles:
+      - nexus-postgres
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - nexus-postgres-data:/var/lib/postgresql/data
+      - ./scripts/docker-compat/nexus-postgres-init.sql:/docker-entrypoint-initdb.d/01-nexus.sql:ro
+
   nexus:
     image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.29.2}
     environment:
-      INSTALL4J_ADD_VM_PARAMS: "-Xms512m -Xmx1536m -XX:MaxDirectMemorySize=1536m"
+      INSTALL4J_ADD_VM_PARAMS: "-Xms512m -Xmx1536m -XX:MaxDirectMemorySize=1536m -Dnexus.scripts.allowCreation=true ${NEXUS_COMPAT_JVM_ARGS:-}"
     ports:
       - "${NEXUS_COMPAT_PORT:-28090}:8081"
     volumes:
@@ -49,8 +68,9 @@ services:
     ports:
       - "${KKREPO_COMPAT_PORT:-18090}:8080"
       - "${KKREPO_MANAGEMENT_PORT:-18091}:8081"
-      - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:18180"
+      - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 
 volumes:
   mysql-data:
   nexus-data:
+  nexus-postgres-data:

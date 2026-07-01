@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.BlobFileRegion;
+import com.github.klboke.kkrepo.core.BlobObjectMetadata;
+import com.github.klboke.kkrepo.core.BlobReference;
+import com.github.klboke.kkrepo.core.BlobStorage;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -14,12 +17,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Proxy;
-import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 class TempBlobFilesTest {
@@ -40,6 +46,19 @@ class TempBlobFilesTest {
 
     TempBlobFiles.configureResponseBufferSize(32 * 1024 * 1024);
     assertEquals(16 * 1024 * 1024, TempBlobFiles.responseBufferSize());
+  }
+
+  @Test
+  void createTempFileRecreatesMissingStagingDirectory(@TempDir Path tempDir) throws Exception {
+    Path stagingDirectory = tempDir.resolve("blob-root").resolve(".tmp");
+
+    Path tempFile = TempBlobFiles.createTempFile(
+        new StagingOnlyBlobStorage(stagingDirectory),
+        "kkrepo-test-",
+        ".blob");
+
+    assertTrue(Files.isRegularFile(tempFile));
+    assertTrue(tempFile.startsWith(stagingDirectory));
   }
 
   @Test
@@ -357,6 +376,43 @@ class TempBlobFilesTest {
         throw new IllegalStateException(
             "ServletOutputStream failed to write", new IOException("Broken pipe"));
       }
+    }
+  }
+
+  private static final class StagingOnlyBlobStorage implements BlobStorage {
+    private final Path stagingDirectory;
+
+    private StagingOnlyBlobStorage(Path stagingDirectory) {
+      this.stagingDirectory = stagingDirectory;
+    }
+
+    @Override
+    public BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Optional<Path> stagingDirectory() {
+      return Optional.of(stagingDirectory);
+    }
+
+    @Override
+    public Optional<InputStream> get(BlobReference reference) {
+      return Optional.empty();
+    }
+
+    @Override
+    public boolean exists(BlobReference reference) {
+      return false;
+    }
+
+    @Override
+    public Optional<BlobObjectMetadata> stat(BlobReference reference) {
+      return Optional.empty();
+    }
+
+    @Override
+    public void delete(BlobReference reference) {
     }
   }
 }

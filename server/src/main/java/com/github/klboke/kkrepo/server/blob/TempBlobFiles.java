@@ -46,7 +46,9 @@ public final class TempBlobFiles {
     if (storage != null) {
       var stagingDirectory = storage.stagingDirectory();
       if (stagingDirectory.isPresent()) {
-        return Files.createTempFile(stagingDirectory.get(), prefix, suffix);
+        Path staging = stagingDirectory.get();
+        Files.createDirectories(staging);
+        return Files.createTempFile(staging, prefix, suffix);
       }
     }
     return Files.createTempFile(prefix, suffix);

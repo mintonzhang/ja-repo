@@ -15,7 +15,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 
-final class CargoCrateInspector {
+public final class CargoCrateInspector {
   static final int MAX_TAR_ENTRIES = 4096;
   static final int MAX_MANIFEST_BYTES = 1024 * 1024;
   static final int MAX_LOGICAL_LINES = 8192;
@@ -24,7 +24,7 @@ final class CargoCrateInspector {
   private CargoCrateInspector() {
   }
 
-  static Manifest inspect(Path crateFile) {
+  public static Manifest inspect(Path crateFile) {
     try (var file = Files.newInputStream(crateFile);
         var gzip = new GzipCompressorInputStream(file);
         var tar = new TarArchiveInputStream(gzip)) {
@@ -569,6 +569,6 @@ final class CargoCrateInspector {
   private record DependencyTable(String name, DependencySection section) {
   }
 
-  record Manifest(String name, String version, Map<String, Object> publishJson) {
+  public record Manifest(String name, String version, Map<String, Object> publishJson) {
   }
 }

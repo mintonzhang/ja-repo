@@ -261,6 +261,15 @@ select {
   vertical-align: top;
 }
 
+.migration-hash-cell {
+  display: inline-block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .code-panel {
   max-height: 220px;
   overflow: auto;

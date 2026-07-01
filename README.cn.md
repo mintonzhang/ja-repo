@@ -56,14 +56,14 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | PyPI | hosted / proxy / group | 支持 twine 上传和管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Go | proxy / group | Go module proxy 以只读代理为主，不支持 hosted 上传 | 支持 | proxy 可作为可选仓库迁移 |
 | Helm | hosted / proxy | 支持 chart push、PUT 上传和管理台上传 | 支持 index.yaml | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| Cargo / Rust | hosted / proxy / group | 支持 `cargo publish`、yank/unyank、`CargoToken` 认证和 UI/API `.crate` 上传 | 支持 sparse index 和 `cargo search` | Nexus Cargo 仓库迁移待定 |
+| Cargo / Rust | hosted / proxy / group | 支持 `cargo publish`、yank/unyank、`CargoToken` 认证和 UI/API `.crate` 上传 | 支持 sparse index 和 `cargo search` | 支持 Cargo 仓库迁移 |
 | Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Yum | hosted / proxy / group | 支持 RPM 上传和管理台上传 | 支持 repodata | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Raw | hosted / proxy / group | 支持 PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 
-仓库数据迁移默认扫描 hosted 仓库；如需迁移源 Sonatype Nexus Repository 部署中作为历史备份或回源缓存使用的 proxy 仓库，可以在迁移页面的 `Optional proxy repositories` 中显式指定仓库名。Cargo / Rust 仓库数据迁移不属于当前迁移流程。
+仓库数据迁移默认扫描 hosted 仓库；如需迁移源 Sonatype Nexus Repository 部署中作为历史备份或回源缓存使用的 proxy 仓库，可以在迁移页面的 `Optional proxy repositories` 中显式指定仓库名。Cargo / Rust 仓库迁移已支持。
 
 ## 从 Sonatype Nexus Repository 迁移
 
@@ -146,7 +146,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 仓库格式路线图：
 
 1. Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
-2. Cargo / Rust - 仓库能力已完成，包含搜索和 UI/API 上传；迁移能力待定（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
+2. Cargo / Rust - 仓库能力已完成，包含搜索、UI/API 上传和迁移能力（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
 3. APT / Debian
 4. Terraform Provider / Module Registry
 5. Conan

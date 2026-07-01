@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
+import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder.MigrationScope;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExportReader;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationBatch;
@@ -60,21 +61,27 @@ public class NexusApiMigrationService {
 
   public NexusMigrationPreflight preflight(NexusMigrationRequest request)
       throws Exception {
-    return preflight(inventory(request), request.targetBlobStore());
+    NexusInventory inventory = inventory(request);
+    return preflight(inventory, request.targetBlobStore(), request.sourceNexusVersion());
   }
 
   @Transactional
   public NexusMigrationResult migrate(NexusMigrationRequest request) throws Exception {
     NexusInventory inventory = inventory(request);
-    NexusMigrationPreflight preflight = preflight(inventory, request.targetBlobStore());
+    NexusMigrationPreflight preflight = preflight(inventory, request.targetBlobStore(), request.sourceNexusVersion());
+    NexusMigrationPlan plan = preflight.migrationPlan();
     long jobId = migrationJobDao.create(
-        defaultString(request.sourceNexusVersion(), DEFAULT_NEXUS_VERSION),
+        defaultString(preflight.sourceProfile().nexusVersion(),
+            defaultString(request.sourceNexusVersion(), DEFAULT_NEXUS_VERSION)),
         request.sourceBaseUrl(),
         Map.of(
             "scope", "p0-p1",
             "dryRun", request.dryRun(),
             "sourceBaseUrl", request.sourceBaseUrl(),
-            "target", "current"));
+            "target", "current",
+            "profileHash", plan.profileHash(),
+            "planHash", plan.planHash(),
+            "sourceAdapter", plan.adapter()));
     try {
       ConfigMigrationCounts configCounts = migrateConfig(inventory, request);
       NexusSecurityMigrationResult apiSecurity = migrateSecurity(inventory.securityExport(), request.dryRun());
@@ -118,6 +125,16 @@ public class NexusApiMigrationService {
   NexusMigrationPreflight preflight(
       NexusInventory inventory,
       NexusMigrationTargetBlobStore targetBlobStore) {
+    return preflight(inventory, targetBlobStore, null);
+  }
+
+  NexusMigrationPreflight preflight(
+      NexusInventory inventory,
+      NexusMigrationTargetBlobStore targetBlobStore,
+      String requestedVersion) {
+    NexusSourceProfile sourceProfile = NexusSourceProfile.fromInventory(inventory, requestedVersion);
+    NexusMigrationPlan migrationPlan = new MigrationPlanBuilder()
+        .build(sourceProfile, new MigrationScope(List.of(), true, false));
     List<UnsupportedRepository> unsupported = new ArrayList<>();
     List<RepositoryMigrationPlan> repositoriesToMigrate = new ArrayList<>();
     List<GroupRepositoryMigrationPlan> groupRepositories = new ArrayList<>();
@@ -154,6 +171,7 @@ public class NexusApiMigrationService {
     NexusSecurityPreflight security = securityPreflight(inventory.securityExport());
     List<String> missingPasswordUsers = passwordResetRequiredUsers(inventory.securityExport());
     List<String> warnings = new ArrayList<>(inventory.warnings());
+    warnings.addAll(sourceProfile.warnings());
     if (!unsupported.isEmpty()) {
       warnings.add("Unsupported repositories will be skipped.");
     }
@@ -173,7 +191,9 @@ public class NexusApiMigrationService {
         security,
         security.users(),
         missingPasswordUsers,
-        warnings);
+        warnings,
+        sourceProfile,
+        migrationPlan);
   }
 
   private List<BlobStoreMigrationPlan> blobStorePlans(
@@ -396,6 +416,9 @@ public class NexusApiMigrationService {
     if (recipe.format().name().equals("RAW")) {
       attributes.put("raw", Map.of("contentDisposition", "ATTACHMENT"));
     }
+    if (recipe.format().name().equals("DOCKER")) {
+      putIfNotNull(attributes, "docker", dockerAttributes(document));
+    }
     return new RepositoryRecord(
         null,
         repositoryName(document),
@@ -462,6 +485,7 @@ public class NexusApiMigrationService {
           List.of()));
     }
     checks.add(validateApiKeyExport(inventory));
+    checks.add(validatePlanHashes(preflight));
     return new NexusMigrationValidation(checks.stream()
         .anyMatch(check -> ValidationStatus.FAIL.name().equals(check.status())),
         checks.stream()
@@ -626,8 +650,29 @@ public class NexusApiMigrationService {
         "security",
         "api keys",
         ValidationStatus.PASS.name(),
-        "No source API keys were exported.",
-        List.of("apiKeys=0"));
+            "No source API keys were exported.",
+            List.of("apiKeys=0"));
+  }
+
+  private ValidationCheck validatePlanHashes(NexusMigrationPreflight preflight) {
+    NexusMigrationPlan plan = preflight.migrationPlan();
+    String profileHash = plan == null ? null : plan.profileHash();
+    String planHash = plan == null ? null : plan.planHash();
+    boolean present = profileHash != null && !profileHash.isBlank()
+        && planHash != null && !planHash.isBlank();
+    return present
+        ? new ValidationCheck(
+            "migration",
+            "profile and plan hashes",
+            ValidationStatus.PASS.name(),
+            "Profile and plan hashes were recorded for deterministic resume validation.",
+            List.of("profileHash=" + profileHash, "planHash=" + planHash))
+        : new ValidationCheck(
+            "migration",
+            "profile and plan hashes",
+            ValidationStatus.FAIL.name(),
+            "Profile and plan hashes were not generated.",
+            List.of());
   }
 
   private ValidationCheck validateLocalUserPasswordHashes(List<String> passwordResetRequired) {
@@ -733,6 +778,17 @@ public class NexusApiMigrationService {
 
   private static String mavenSetting(RepositoryDocument document, String key) {
     return upper(string(nested(value(document, "maven"), key)));
+  }
+
+  private static Map<String, Object> dockerAttributes(RepositoryDocument document) {
+    LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
+    Integer connectorPort = intValue(nested(value(document, "docker"), "httpPort"));
+    if (connectorPort == null) {
+      connectorPort = intValue(nested(nested(value(document, "attributes"), "docker"), "connectorPort"));
+    }
+    attributes.put("connectorEnabled", connectorPort != null);
+    putIfNotNull(attributes, "connectorPort", connectorPort);
+    return Map.copyOf(attributes);
   }
 
   private static Object nested(Object value, String key) {
@@ -852,7 +908,9 @@ public class NexusApiMigrationService {
       NexusSecurityPreflight security,
       int users,
       List<String> passwordResetRequiredUsers,
-      List<String> warnings) {
+      List<String> warnings,
+      NexusSourceProfile sourceProfile,
+      NexusMigrationPlan migrationPlan) {
 
     public NexusMigrationPreflight {
       blobStorePlans = blobStorePlans == null ? List.of() : List.copyOf(blobStorePlans);
@@ -865,6 +923,44 @@ public class NexusApiMigrationService {
           ? List.of()
           : List.copyOf(passwordResetRequiredUsers);
       warnings = warnings == null ? List.of() : List.copyOf(warnings);
+      sourceProfile = sourceProfile == null
+          ? NexusSourceProfile.fromInventory(new NexusInventory(List.of(), List.of(), null, List.of()), null)
+          : sourceProfile;
+      migrationPlan = migrationPlan == null
+          ? new MigrationPlanBuilder().build(sourceProfile, new MigrationScope(List.of(), true, false))
+          : migrationPlan;
+    }
+
+    public NexusMigrationPreflight(
+        int blobStores,
+        int repositories,
+        int supportedRepositories,
+        int unsupportedRepositories,
+        List<BlobStoreMigrationPlan> blobStorePlans,
+        List<RepositoryMigrationPlan> repositoriesToMigrate,
+        List<UnsupportedRepository> unsupported,
+        List<GroupRepositoryMigrationPlan> groupRepositories,
+        List<ProxyRemoteRisk> proxyRemoteRisks,
+        NexusSecurityPreflight security,
+        int users,
+        List<String> passwordResetRequiredUsers,
+        List<String> warnings) {
+      this(
+          blobStores,
+          repositories,
+          supportedRepositories,
+          unsupportedRepositories,
+          blobStorePlans,
+          repositoriesToMigrate,
+          unsupported,
+          groupRepositories,
+          proxyRemoteRisks,
+          security,
+          users,
+          passwordResetRequiredUsers,
+          warnings,
+          null,
+          null);
     }
   }
 

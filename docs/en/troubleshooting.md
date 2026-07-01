@@ -185,7 +185,7 @@ Common causes:
 - Source credentials lack sufficient permissions.
 - Source Nexus cannot expose local user password hashes; those users must reset passwords.
 - Proxy repositories were expected but not listed in `Optional proxy repositories`.
-- Cargo / Rust repository migration is currently not supported by the existing migration flow.
+- Cargo / Rust migration was blocked because preflight did not prove a supported datastore Cargo content model; review the Source Profile and plan item status.
 - Blob migration is slow because concurrency is too low, source Nexus is overloaded, or object storage is throttling.
 
 See [Nexus Migration Guide](nexus-migration-guide.md).

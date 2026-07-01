@@ -130,7 +130,7 @@ Do not assume Docker pull/push works through `/repository/<repo>/...`.
 
 Cargo hosted, proxy, and group repositories are supported through the Cargo sparse registry protocol. kkrepo supports `cargo publish`, fetch/download, yank/unyank, `cargo search`, `CargoToken` authentication, and hosted `.crate` upload through the UI/API.
 
-Nexus Cargo repository migration is currently TBD. Nexus Community Cargo support starts from the 3.77.x datastore-era H2/PostgreSQL shape, so Cargo repositories should not be treated as covered by the existing Nexus migration flow.
+Nexus Cargo hosted repository migration is supported for datastore-era H2/PostgreSQL sources when preflight proves the Cargo content model. Unknown schema fingerprints fail closed in the migration plan, and OrientDB-era sources do not enable Cargo content export.
 
 ## Is kkrepo production-ready?
 

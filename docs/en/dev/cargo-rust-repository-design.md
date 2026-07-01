@@ -4,7 +4,7 @@ This document records the Cargo / Rust repository design notes for kkrepo. The g
 
 ## Current Support
 
-Cargo / Rust first-phase repository support is implemented for hosted, proxy, and group repositories. This document remains the design and verification guide for protocol compatibility work. Nexus Cargo repository migration is currently TBD and is not part of the first phase.
+Cargo / Rust repository support is implemented for hosted, proxy, and group repositories. This document remains the design and verification guide for protocol compatibility work, including Nexus datastore-era Cargo migration.
 
 First phase support:
 
@@ -18,7 +18,7 @@ First phase support:
 - Cargo token authentication, anonymous/read/write permissions, and CI-token publishing.
 - Cargo black-box compatibility tests against a Nexus reference instance, plus real `cargo` client verification.
 
-Current support does not include the Cargo git index protocol, crates.io-style GitHub owner invitations, deletion of published crate versions, or Nexus Cargo repository migration. Native `cargo search` and kkrepo-native UI/API `.crate` upload are now implemented as kkrepo product enhancements, not Nexus compatibility requirements. Nexus native Cargo support is also centered on sparse protocol and explicitly does not support native Cargo client search or UI/API component upload. Cargo migration research remains TBD; Cargo git index, crates.io-style GitHub owner invitations, and deletion of published crate versions are explicit non-goals.
+Current support does not include the Cargo git index protocol, crates.io-style GitHub owner invitations, or deletion of published crate versions. Native `cargo search` and kkrepo-native UI/API `.crate` upload are implemented as kkrepo product enhancements, not Nexus compatibility requirements. Nexus native Cargo support is also centered on sparse protocol and explicitly does not support native Cargo client search or UI/API component upload. Nexus datastore-era Cargo hosted repository migration is supported when the source profile proves the Cargo content model; Cargo git index, crates.io-style GitHub owner invitations, and deletion of published crate versions are explicit non-goals.
 
 ## Research Baseline
 
@@ -31,7 +31,7 @@ Implementation must be checked against these protocols and reference behaviors f
 - Cargo Book: Source Replacement. Source replacement requires the replacement source to be equivalent to the original source. When mixing private packages with a crates.io proxy, prefer alternate registries; do not present the mixed group as an exact crates.io replacement.
 - Nexus Repository Rust / Cargo documentation. Nexus supports hosted, proxy, and group Cargo repositories, only supports sparse protocol, requires the proxy remote URL to keep the trailing `/`, requires Cargo 1.68+, and supports yank/unyank.
 - Nexus Repository 3.73.0 and 3.77.0 release notes. Version 3.73.0 introduced Pro-only native Rust / Cargo hosted, proxy, and group repositories; it also states native Cargo is not compatible with the old community plugin and data migration is not supported. Version 3.77.0 later made previously Pro-only formats available through Community Edition. The kkrepo compatibility baseline should use Nexus 3.77.0+ reference instances.
-- Current Nexus Repository database shape. Nexus 3.71.0 and later no longer support OrientDB; current deployments support embedded H2 and external PostgreSQL. The existing kkrepo Nexus migration path is mainly designed around older OrientDB / Script REST API compensation and must not be assumed to apply to Nexus 3.77.0+ Cargo data.
+- Current Nexus Repository database shape. Nexus 3.71.0 and later no longer support OrientDB; current deployments support embedded H2 and external PostgreSQL. Cargo migration must use datastore H2/PostgreSQL schema fingerprints and fail closed when the content model cannot be proven.
 
 Key conclusions:
 
@@ -44,7 +44,7 @@ Key conclusions:
 - `yank` does not delete the `.crate` file; it only changes the `yanked` field in the index JSON. Existing `Cargo.lock` files should still be able to download the yanked version, while new resolution should not select it.
 - Crate index file names are lowercase, but the package name in index JSON is case-sensitive. To avoid case-only conflicts on the same index path, kkrepo should reject crate names that differ only by case within the same repository.
 - `cargo search` and kkrepo-native UI/API `.crate` upload are kkrepo product enhancements. `cargo search` implements Cargo Registry Web API query semantics: hosted queries the current repository's MySQL component/asset index, proxy prefers the upstream `api` search to avoid false negatives for uncached packages and falls back to the local cache when upstream is unavailable, and group aggregates members by order with crate-name dedupe. UI/API upload reuses the hosted publish validation, checksum, transaction write, permission, and audit path; it must not bypass the correctness constraints already established for `cargo publish`.
-- Cargo migration needs a new source-read strategy. Native Cargo became broadly available while Nexus was already in the H2/PostgreSQL database era. Repository, component, asset, token, and blob metadata reads may no longer match older OrientDB script queries. The first phase implements protocol behavior and compatibility tests only; it does not promise Cargo repository data or Cargo token migration.
+- Cargo migration uses the datastore source-read strategy. Native Cargo became broadly available while Nexus was already in the H2/PostgreSQL database era, so repository, component, asset, token, and blob metadata reads are gated by source profile fingerprints instead of older OrientDB script assumptions. Hosted Cargo content migration is enabled only when sparse index, crate blob, checksum, and yanked-state mapping are proven.
 
 ## Feature Scope
 
@@ -90,16 +90,16 @@ Key conclusions:
    - Verify both alternate registry and source replacement configurations in `.cargo/config.toml`, and document the boundary between them.
    - Run `scripts/ci/run-live-compat.sh client-e2e` when Cargo changes should be validated as part of the repository-wide real client matrix.
 
-### Implemented Enhancements, TBD Items, And Non-Goals
+### Implemented Enhancements, Migration Scope, And Non-Goals
 
 Implemented enhancements:
 
 - Native `cargo search`. Cargo Registry Web API `GET /api/v1/crates` is implemented. Hosted searches the current repository, proxy prefers upstream API search, and group aggregates member results. This is a kkrepo product enhancement, not a Nexus compatibility requirement, because Nexus explicitly does not support native Cargo client search.
 - kkrepo-native UI/API `.crate` upload. Hosted Cargo repositories can now accept a single `.crate` file through admin/UI upload and `/service/rest/v1/components`, reusing hosted `cargo publish` crate validation, metadata/index generation, checksum handling, MySQL transactions, blob writes, permission checks, audit, and error semantics so UI/API upload and Cargo client publish do not diverge.
 
-TBD:
+Migration scope:
 
-- Cargo migration research remains TBD, and Nexus Cargo repository migration is not implemented in the first phase. If this starts later, first confirm H2/PostgreSQL source reads, official/non-public API availability, sparse index data, blob metadata, token/User Token storage, permission mapping, checksum verification, and cutover validation on Nexus 3.77.0+ reference instances.
+- Nexus datastore H2/PostgreSQL Cargo hosted migration is enabled only when preflight proves source reads, sparse index data, blob metadata, checksum verification, yanked state, token/User Token handling, permission mapping, and cutover validation boundaries on reference instances.
 
 Explicit non-goals:
 
@@ -334,11 +334,11 @@ Browse UI:
 
 Migration:
 
-- Nexus Cargo repository migration is TBD, not implemented in the first phase, and must not be promised in UI or docs.
+- Nexus datastore H2/PostgreSQL Cargo hosted migration is supported when the source profile marks the repository plan item `FULL`; unknown source shapes must stay blocked in UI and docs.
 - Background: Nexus Repository Pro 3.73.0 had initial Pro-only native Cargo support, but 3.77.0 made previously Pro-only formats officially available through Community Edition. At that point Nexus was already in the H2/PostgreSQL database era, so the existing old-Nexus OrientDB / Script REST API migration compensation path cannot be reused directly.
-- If Cargo migration starts later, first confirm source-readable data entrypoints on Nexus 3.77.0+ reference instances: official REST APIs, database export, blob metadata, sparse index, token/User Token storage, and permission mapping.
-- Future migration design must support dry-run, resume, checksum verification, and reports, and must explicitly define source-read strategies for both H2 and PostgreSQL.
-- Future Cargo token migration must create every token/credential shape supported by that Nexus version in a reference instance. After migration to kkrepo, tokens in the original `.cargo/config.toml` and `credentials.toml` must continue to work without reissue or manual replacement for `cargo fetch`, `cargo publish`, `cargo yank`, and `cargo yank --undo` according to their original permissions.
+- Cargo migration reads source-visible data entrypoints on Nexus 3.77.0+ reference instances: official REST APIs, database export, blob metadata, sparse index, token/User Token storage, and permission mapping.
+- The migration design supports dry-run, resume, checksum verification, and reports, and defines source-read strategies for both H2 and PostgreSQL.
+- Cargo token migration must create every token/credential shape supported by that Nexus version in a reference instance. After migration to kkrepo, tokens in the original `.cargo/config.toml` and `credentials.toml` must continue to work without reissue or manual replacement for `cargo fetch`, `cargo publish`, `cargo yank`, and `cargo yank --undo` according to their original permissions.
 - If any Nexus-supported Cargo token cannot be migrated automatically and continue working, Cargo migration acceptance must fail. It may only be reported as an explicit `MANUAL` blocker; do not silently downgrade to "reissue after migration."
 - Old community-plugin data explicitly incompatible with Nexus documentation is not promised for automatic migration. If users need it, handle it as a separate source-data analysis and one-off conversion design.
 - Migration state belongs in MySQL, not local files as the only checkpoint.
@@ -418,14 +418,14 @@ The first phase is complete only when:
 - Index requests support `ETag` or `Last-Modified`, and client conditional requests can receive `304`.
 - Reading new index state after publish/yank across replicas does not rely on local process state.
 - Proxy remote `404/410/451`, remote `304`, checksum mismatch, and network failure all have explicit tests.
-- The first phase does not provide Nexus Cargo repository migration. Migration pages, compatibility matrices, and release notes must not mark Cargo as migratable.
+- Nexus datastore H2/PostgreSQL Cargo hosted migration preserves sparse index entries, `.crate` downloads, checksums, and yanked state when the source profile marks the repository plan item `FULL`.
 - Nexus reference compatibility tests record all known differences, and only normalize host, timestamp, or header ordering when the protocol allows it.
 
 Enhancement acceptance:
 
 - `cargo search --registry <name>` returns Cargo-client-displayable search results through kkrepo Cargo hosted/proxy/group repositories; hosted/group results do not cross repository permission boundaries, proxy prefers the upstream API to avoid false negatives for uncached packages, and tests cover empty results, pagination, and permission filtering.
 - UI/API `.crate` upload shares the same validation, checksum, metadata/index write, permission, and audit path as `cargo publish`; publishing the same crate version through either entrypoint produces equivalent index and download behavior, and hosted repository write policy is not bypassed.
-- Cargo migration remains TBD. It may move into a separate migration design only after Nexus 3.77.0+ H2/PostgreSQL source data, token, permission, and blob verification research is complete.
+- Cargo migration must remain plan-gated. If Nexus H2/PostgreSQL source data, token, permission, checksum, or blob fingerprints drift, preflight marks the affected repository or area unsupported instead of guessing.
 
 ## References
 
