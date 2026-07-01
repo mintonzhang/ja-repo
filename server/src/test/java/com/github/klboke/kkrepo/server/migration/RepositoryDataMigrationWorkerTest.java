@@ -38,7 +38,28 @@ class RepositoryDataMigrationWorkerTest {
     assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(RepositoryFormat.NPM, "config.json"));
   }
 
+  @Test
+  void rubygemsDependencyIndexUsesDownloadedBytesInsteadOfSourceMetadataSize() {
+    assertFalse(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.RUBYGEMS, "dependencies/demo.ruby")));
+    assertFalse(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.RUBYGEMS, "/dependencies/demo.ruby")));
+
+    assertTrue(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.RUBYGEMS, "gems/demo-1.0.0.gem")));
+    assertTrue(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.MAVEN2, "dependencies/demo.ruby")));
+  }
+
   private static AssetClaim claim(long repositoryJobId, long migrationJobId, String path) {
+    return claim(repositoryJobId, migrationJobId, RepositoryFormat.MAVEN2, path);
+  }
+
+  private static AssetClaim claim(
+      long repositoryJobId,
+      long migrationJobId,
+      RepositoryFormat format,
+      String path) {
     RepositoryDataMigrationAssetRecord asset = new RepositoryDataMigrationAssetRecord(
         null,
         repositoryJobId,
@@ -46,7 +67,7 @@ class RepositoryDataMigrationWorkerTest {
         null,
         path,
         null,
-        RepositoryFormat.MAVEN2,
+        format,
         "com.acme",
         "app",
         "1.0",
@@ -76,7 +97,7 @@ class RepositoryDataMigrationWorkerTest {
         "source",
         "target",
         1L,
-        RepositoryFormat.MAVEN2,
+        format,
         "http://nexus.example",
         Map.of());
   }

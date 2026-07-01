@@ -276,9 +276,13 @@ class RepositoryDataMigrationWorker {
         .orElse(DEFAULT_CONCURRENCY);
   }
 
-  private static boolean shouldValidateDownloadedSize(AssetClaim claim) {
+  static boolean shouldValidateDownloadedSize(AssetClaim claim) {
     if (claim.repositoryFormat() == RepositoryFormat.NPM
         && !claim.asset().sourcePath().toLowerCase().endsWith(".tgz")) {
+      return false;
+    }
+    if (claim.repositoryFormat() == RepositoryFormat.RUBYGEMS
+        && isRubygemsDependencyIndex(claim.asset().sourcePath())) {
       return false;
     }
     return true;
@@ -300,6 +304,17 @@ class RepositoryDataMigrationWorker {
       normalized = normalized.substring(1);
     }
     return "config.json".equals(normalized);
+  }
+
+  private static boolean isRubygemsDependencyIndex(String path) {
+    if (path == null) {
+      return false;
+    }
+    String normalized = path.trim();
+    while (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    return normalized.startsWith("dependencies/") && normalized.endsWith(".ruby");
   }
 
   private static boolean changedSince(RepositoryAssetMetadata asset, Instant since) {
