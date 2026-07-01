@@ -12,14 +12,9 @@ kkRepo is an independent, self-hosted artifact repository for Maven, npm, PyPI, 
 
 The project implements client-visible compatibility and migration support for Sonatype Nexus Repository deployments, including the `/repository/<repo>/...` URL layout and compatible permission/authentication behavior where required for migration. kkRepo uses MySQL for metadata and shared runtime state, supports OSS/S3 blob storage, and is designed for multi-replica deployment.
 
-- Java and Spring Boot based service
-- MySQL metadata and identity data
-- MySQL-coordinated runtime state plus in-process TTL cache
-- OSS/S3/File blob storage
-- `/repository/<repo>/...` protocol entrypoint and compatible permission model for migration scenarios
-- One-click migration tooling for existing Sonatype Nexus Repository instances, with zero-downtime migration to kkRepo
-- Lightweight operations console under `/admin/`
-- User-facing repository browser under `/browse/`
+<p align="center">
+  <img src="docs/assets/kkrepo-project-map.svg" alt="kkRepo architecture: supported repository formats, protocol entrypoints, service replicas, storage, UI, and Nexus migration" width="100%">
+</p>
 
 ## Trademark Notice
 
