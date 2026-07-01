@@ -6,11 +6,11 @@
 
   <groupId>com.github.klboke</groupId>
   <artifactId>kkrepo</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <packaging>pom</packaging>
 
   <name>kkRepo</name>
-  <description>Self-hosted artifact repository with migration-oriented compatibility support.</description>
+  <description>Self-hosted artifact repository for Maven, npm, PyPI, Cargo/Rust, Docker/OCI, and other formats with Nexus-compatible migration support.</description>
 
   <modules>
     <module>core</module>

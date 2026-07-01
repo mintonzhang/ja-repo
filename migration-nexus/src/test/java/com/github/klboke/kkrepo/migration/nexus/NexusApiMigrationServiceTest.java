@@ -11,8 +11,11 @@ import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMi
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.ConfigMigrationCounts;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationTargetBlobStore;
+import com.github.klboke.kkrepo.migration.nexus.NexusMigrationPlan.SupportStatus;
+import com.github.klboke.kkrepo.migration.nexus.NexusSourceProfile.MetadataEngine;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
+import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
 import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
@@ -103,6 +106,178 @@ class NexusApiMigrationServiceTest {
     assertTrue(preflight.security().apiKeyDetails().get(0).rawKeyPresent());
     assertEquals("public-maven", preflight.security().contentSelectorDetails().get(0).name());
     assertEquals(List.of("NexusAuthenticatingRealm"), preflight.security().realmOrder());
+    assertEquals(MetadataEngine.ORIENTDB, preflight.sourceProfile().metadataEngine());
+    assertEquals("OrientDbNexusAdapter", preflight.migrationPlan().adapter());
+    assertEquals(
+        SupportStatus.FULL,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "maven-releases".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+    assertEquals(64, preflight.migrationPlan().profileHash().length());
+    assertEquals(64, preflight.migrationPlan().planHash().length());
+  }
+
+  @Test
+  void datastoreSourceProfileEnablesRepositoryContentWhenSchemaFingerprintMatches() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+    SourceProbe probe = new SourceProbe(
+        "3.77.2-02",
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_H2",
+        "H2 2.3.232",
+        "jdbc:h2:file:/nexus-data/db/nexus",
+        datastoreSchema(Map.of("maven2", true, "cargo", true)),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")),
+        List.of(
+            repository("maven-releases", "maven2", "hosted", Map.of("storage", storage("default"))),
+            repository("cargo-hosted", "cargo", "hosted", Map.of("storage", storage("default")))),
+        NexusSecurityExport.empty(),
+        List.of(),
+        probe),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()),
+        null);
+
+    assertEquals(MetadataEngine.DATASTORE_H2, preflight.sourceProfile().metadataEngine());
+    assertEquals("DatastoreH2NexusAdapter", preflight.migrationPlan().adapter());
+    assertEquals("3.77.2-02", preflight.sourceProfile().nexusVersion());
+    assertTrue(preflight.warnings().stream().noneMatch(value -> value.contains("Datastore-era Nexus")));
+    assertEquals(
+        true,
+        preflight.sourceProfile().formatCapabilities().get("maven2").contentMigration());
+    assertEquals(
+        true,
+        preflight.sourceProfile().formatCapabilities().get("cargo").contentMigration());
+    assertTrue(preflight.warnings().stream()
+        .noneMatch(value -> value.contains("Cargo migration remains configuration-only")));
+    assertEquals(
+        SupportStatus.FULL,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "maven-releases".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+    assertEquals(
+        SupportStatus.FULL,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "cargo-hosted".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+  }
+
+  @Test
+  void postgresqlDatastoreSourceProfileEnablesCargoContentWhenSchemaFingerprintMatches() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+    SourceProbe probe = new SourceProbe(
+        "3.77.2-02",
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://postgres:5432/nexus",
+        datastoreSchema(Map.of("cargo", true)),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")),
+        List.of(repository("cargo-hosted", "cargo", "hosted", Map.of("storage", storage("default")))),
+        NexusSecurityExport.empty(),
+        List.of(),
+        probe),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()),
+        null);
+
+    assertEquals(MetadataEngine.DATASTORE_POSTGRESQL, preflight.sourceProfile().metadataEngine());
+    assertEquals("DatastorePostgresqlNexusAdapter", preflight.migrationPlan().adapter());
+    assertTrue(preflight.sourceProfile().formatCapabilities().get("cargo").contentMigration());
+    assertEquals(
+        SupportStatus.FULL,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "cargo-hosted".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+  }
+
+  @Test
+  void securityPlanRequiresManualActionWhenSourceSecretsAreMissing() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+    SourceProbe probe = new SourceProbe(
+        "3.77.2-02",
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_H2",
+        "H2 2.3.232",
+        "jdbc:h2:file:/nexus-data/db/nexus",
+        datastoreSchema(Map.of("maven2", true)),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")),
+        List.of(repository("maven-releases", "maven2", "hosted", Map.of("storage", storage("default")))),
+        NexusSecurityExport.empty(),
+        List.of("Source Nexus script API did not expose API keys"),
+        probe),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()),
+        null);
+
+    NexusMigrationPlan.NexusMigrationPlanItem securityItem = preflight.migrationPlan().items().stream()
+        .filter(item -> "security".equals(item.area()))
+        .findFirst()
+        .orElseThrow();
+    assertEquals(SupportStatus.DATA_ONLY, securityItem.status());
+    assertEquals("rest-and-script-manual-secrets", securityItem.readMode());
+    assertTrue(preflight.migrationPlan().manualActions().contains("security:local-security"));
+  }
+
+  @Test
+  void datastoreSourceProfilePlansRepositoryContentConfigOnlyWhenSchemaFingerprintIsIncomplete() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+    SourceProbe probe = new SourceProbe(
+        "3.77.2-02",
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_H2",
+        "H2 2.3.232",
+        "jdbc:h2:file:/nexus-data/db/nexus",
+        datastoreSchema("maven2", false),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")),
+        List.of(repository("maven-releases", "maven2", "hosted", Map.of("storage", storage("default")))),
+        NexusSecurityExport.empty(),
+        List.of(),
+        probe),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()),
+        null);
+
+    assertEquals(false, preflight.sourceProfile().formatCapabilities().get("maven2").contentMigration());
+    assertEquals(
+        SupportStatus.CONFIG_ONLY,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "maven-releases".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
   }
 
   @Test
@@ -169,6 +344,28 @@ class NexusApiMigrationServiceTest {
     assertEquals(List.of(), repositories.memberNames("go-public"));
   }
 
+  @Test
+  void migratesDockerConnectorPortFromSourceHttpPort() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(blobStores, repositories);
+
+    ConfigMigrationCounts counts = service.migrateConfig(new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(repository("docker-hosted", "docker", "hosted", Map.of(
+            "storage", storage("default"),
+            "docker", Map.of("httpPort", 18183, "forceBasicAuth", true)))),
+        NexusSecurityExport.empty(),
+        List.of()), request("https://old-nexus.example"));
+
+    RepositoryRecord record = repositories.required("docker-hosted");
+    assertEquals(1, counts.repositories());
+    assertEquals("docker-hosted", record.recipeName());
+    assertEquals(
+        Map.of("connectorEnabled", true, "connectorPort", 18183),
+        record.attributes().get("docker"));
+  }
+
   private static NexusApiMigrationService service(BlobStoreDao blobStores, RepositoryDao repositories) {
     return new NexusApiMigrationService(
         new ObjectMapper(),
@@ -210,6 +407,30 @@ class NexusApiMigrationServiceTest {
         "blobStoreName", blobStoreName,
         "strictContentTypeValidation", true,
         "writePolicy", "allow_once");
+  }
+
+  private static Map<String, Object> datastoreSchema(String format, boolean complete) {
+    return datastoreSchema(Map.of(format, complete));
+  }
+
+  private static Map<String, Object> datastoreSchema(Map<String, Boolean> formats) {
+    Map<String, Object> models = new LinkedHashMap<>();
+    formats.forEach((format, complete) -> {
+      String prefix = "maven2".equals(format) ? "MAVEN2" : format.toUpperCase(java.util.Locale.ROOT);
+      models.put(format, Map.of(
+          "prefix", prefix,
+          "tablesPresent", true,
+          "requiredColumnsPresent", complete,
+          "tables", Map.of(
+              "contentRepository", prefix + "_CONTENT_REPOSITORY",
+              "asset", prefix + "_ASSET",
+              "assetBlob", prefix + "_ASSET_BLOB",
+              "component", prefix + "_COMPONENT"),
+          "columns", Map.of()));
+    });
+    return Map.of(
+        "columns", List.of("ID", "NAME", "RECIPE_NAME", "ATTRIBUTES"),
+        "datastoreContentModels", models);
   }
 
   private static final class FakeBlobStoreDao extends BlobStoreDao {

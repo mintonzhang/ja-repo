@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -100,6 +101,50 @@ class BrowseControllerSecurityTest {
     assertEquals(List.of("sample"), listing.entries().stream().map(BrowseController.BrowseEntry::name).toList());
     assertEquals(List.of(key(member.id(), "packages")), browseNodes.calls);
     assertEquals(List.of("nexus:repository-view:pypi:pypi-group:browse"), security.permissions);
+  }
+
+  @Test
+  void cargoRootBrowseIncludesDynamicConfigEntry() {
+    RepositoryRecord repository = repo(1L, "cargo-hosted", RepositoryFormat.CARGO, RepositoryType.HOSTED);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(repository.id(), ""), List.of(child("kk", "kk", false)));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    BrowseController controller = controller(repositories, browseNodes, subject("alice"), null, security);
+
+    BrowseController.BrowseListing listing = controller.list(
+        "cargo-hosted",
+        "",
+        request("GET", "/internal/browse/cargo-hosted"));
+
+    assertEquals("", listing.path());
+    assertEquals(List.of("kk", "config.json"), listing.entries().stream().map(BrowseController.BrowseEntry::name).toList());
+    BrowseController.BrowseEntry config = listing.entries().stream()
+        .filter(entry -> "config.json".equals(entry.name()))
+        .findFirst()
+        .orElseThrow();
+    assertTrue(config.leaf());
+    assertEquals("/repository/cargo-hosted/config.json", config.downloadUrl());
+    assertEquals("application/json", config.contentType());
+    assertEquals(List.of(key(repository.id(), "")), browseNodes.calls);
+  }
+
+  @Test
+  void cargoDynamicConfigIsOnlyAddedAtRoot() {
+    RepositoryRecord repository = repo(1L, "cargo-hosted", RepositoryFormat.CARGO, RepositoryType.HOSTED);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(repository.id(), "kk"), List.of(child("kk/re", "re", false)));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    BrowseController controller = controller(repositories, browseNodes, subject("alice"), null, security);
+
+    BrowseController.BrowseListing listing = controller.list(
+        "cargo-hosted",
+        "kk",
+        request("GET", "/internal/browse/cargo-hosted"));
+
+    assertEquals("kk", listing.path());
+    assertEquals(List.of("re"), listing.entries().stream().map(BrowseController.BrowseEntry::name).toList());
   }
 
   @Test

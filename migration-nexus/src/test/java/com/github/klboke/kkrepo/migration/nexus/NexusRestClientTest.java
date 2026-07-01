@@ -8,13 +8,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.HttpTextResponse;
+import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
 
 class NexusRestClientTest {
@@ -27,8 +33,8 @@ class NexusRestClientTest {
 
     assertEquals(1, inventory.securityExport().users().size());
     assertFalse(inventory.securityExport().users().get(0).containsKey("passwordHash"));
-    assertEquals(1, inventory.warnings().size());
-    assertTrue(inventory.warnings().get(0).contains("HTTP 410"));
+    assertEquals(2, inventory.warnings().size());
+    assertTrue(inventory.warnings().stream().allMatch(value -> value.contains("HTTP 410")));
   }
 
   @Test
@@ -44,9 +50,37 @@ class NexusRestClientTest {
     assertEquals("nx-admin", inventory.securityExport().roles().get(0).get("id"));
     assertEquals(List.of(), inventory.securityExport().realmOrder());
     assertEquals(List.of(), inventory.warnings());
+    assertEquals("3.77.2-02", inventory.probe().nexusVersion());
+    assertEquals("DATASTORE_H2", inventory.probe().metadataEngine());
+    assertEquals("H2 2.3.232", inventory.probe().jdbcProduct());
     assertTrue(nexus.scriptDeleted);
     assertEquals("/service/rest/v1/security/users?source=default", nexus.usersPath);
     assertEquals("/service/rest/v1/security/roles?source=default", nexus.rolesPath);
+  }
+
+  @Test
+  void sourceProfileProbeRunsScriptWithTextPlainBody() throws Exception {
+    FakeNexus nexus = new FakeNexus(true);
+    NexusInventory inventory = client(nexus).readInventory();
+    SourceProbe probe = inventory.probe();
+
+    assertEquals("ok", probe.scriptApiStatus());
+    assertTrue(probe.scriptApiCreatable());
+    assertTrue(probe.scriptApiRunnable());
+    assertTrue(probe.scriptApiDeleted());
+    assertTrue(nexus.profileRunContentType.contains("text/plain"));
+  }
+
+  @Test
+  void sourceProfileProbeIgnoresEmptyRestStatusBody() throws Exception {
+    FakeNexus nexus = new FakeNexus(true);
+    nexus.emptyStatusBody = true;
+
+    NexusInventory inventory = client(nexus).readInventory();
+
+    assertEquals("3.77.2-02", inventory.probe().nexusVersion());
+    assertFalse(inventory.warnings().stream()
+        .anyMatch(value -> value.contains("No content to map")));
   }
 
   @Test
@@ -86,11 +120,66 @@ class NexusRestClientTest {
     field.setAccessible(true);
     String script = (String) field.get(null);
 
-    assertTrue(script.contains("container.lookup(DatabaseInstance.class, DatabaseInstanceNames.SECURITY)"));
-    assertTrue(script.contains("container.lookup(DatabaseInstance.class, 'security')"));
+    assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.config.SecurityConfigurationManager')"));
+    assertTrue(script.contains("new JsonSlurper().parseText(args)"));
+    assertTrue(script.contains("metadataEngine == 'ORIENTDB'"));
+    assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
+    assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.authc.apikey.ApiKeyLowLevelService')"));
+    assertTrue(script.contains("select distinct domain from api_key_v2 order by domain"));
+    assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstance')"));
+    assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')"));
+    assertTrue(script.contains("container.lookup(databaseClass, securityName)"));
+    assertTrue(script.contains("container.lookup(databaseClass, 'security')"));
+    assertTrue(script.contains("loadClass('com.orientechnologies.orient.core.sql.query.OSQLSynchQuery')"));
+    assertTrue(script.contains("SecurityConfigurationManager unavailable"));
+    assertFalse(script.contains("OrientDB security database unavailable"));
+    assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstance"));
+    assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstanceNames"));
+    assertFalse(script.contains("import org.sonatype.nexus.security.config.SecurityConfigurationManager"));
+    assertFalse(script.contains("import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery"));
     assertFalse(script.contains("DatabaseInstance.class.name,"));
     assertFalse(script.contains("SecurityConfigurationManager.class.name, 'default'"));
     assertFalse(script.contains("ClassLoader.class.name, 'nexus-uber'"));
+  }
+
+  @Test
+  void securityExportScriptReceivesSourceMetadataEngine() throws Exception {
+    FakeNexus nexus = new FakeNexus(true);
+
+    client(nexus).readInventory();
+
+    Map<String, Object> request = OBJECT_MAPPER.readValue(nexus.securityExportRequestBody, Map.class);
+    assertEquals("DATASTORE_H2", request.get("metadataEngine"));
+  }
+
+  @Test
+  void sourceProfileScriptGuardsNullApplicationStatusSource() throws Exception {
+    var field = NexusRestClient.class.getDeclaredField("SOURCE_PROFILE_PROBE_SCRIPT");
+    field.setAccessible(true);
+    String script = (String) field.get(null);
+
+    assertTrue(script.contains("container.lookup('org.sonatype.nexus.common.app.ApplicationStatusSource')"));
+    assertTrue(script.contains("applicationStatus == null ? null : applicationStatus.getSystemStatus()"));
+    assertTrue(script.contains("not actionable migration warnings"));
+    assertFalse(script.contains("def status = applicationStatus.getSystemStatus()"));
+    assertFalse(script.contains("ApplicationStatusSource did not return system status"));
+    assertFalse(script.contains("version probe failed:"));
+    assertFalse(script.contains("import org.sonatype.nexus.common.app.ApplicationStatusSource"));
+  }
+
+  @Test
+  void sourceProfileScriptDetectsDatastoreFromComponentConnection() throws Exception {
+    var field = NexusRestClient.class.getDeclaredField("SOURCE_PROFILE_PROBE_SCRIPT");
+    field.setAccessible(true);
+    String script = (String) field.get(null);
+
+    assertTrue(script.contains("container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')"));
+    assertTrue(script.contains("datastore.openConnection()"));
+    assertTrue(script.contains("inspectConnection(connection, 'DataStoreManager')"));
+    assertTrue(script.contains("out.metadataEngine = 'DATASTORE_H2'"));
+    assertTrue(script.contains("out.metadataEngine = 'DATASTORE_POSTGRESQL'"));
+    assertFalse(script.contains("new File("));
+    assertFalse(script.contains("nexus-store.properties"));
   }
 
   @Test
@@ -99,9 +188,20 @@ class NexusRestClientTest {
     field.setAccessible(true);
     String script = (String) field.get(null);
 
-    assertTrue(script.contains("DatabaseInstanceNames.COMPONENT"));
+    assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstance')"));
+    assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')"));
+    assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
+    assertTrue(script.contains("repositoryFormat"));
+    assertTrue(script.contains("_CONTENT_REPOSITORY"));
+    assertTrue(script.contains("_ASSET_BLOB"));
+    assertTrue(script.contains("def sourcePathCursor = { value ->"));
+    assertTrue(script.contains("def repositoryRelativePath = { value ->"));
+    assertTrue(script.contains("def datastoreAfterPath = sourcePathCursor(afterPath)"));
+    assertTrue(script.contains("path: path,"));
+    assertTrue(script.contains("nextAfterPath: repositoryRelativePath(lastPath)"));
     assertTrue(script.contains("where bucket = ? and name > ? order by name limit"));
-    assertTrue(script.contains("def changedSince = { asset ->"));
+    assertTrue(script.contains("def changedSinceOrient = { asset ->"));
+    assertTrue(script.contains("def changedSinceDatastore = { row ->"));
     assertTrue(script.contains("asset.field('blob_updated')"));
     assertTrue(script.contains("asset.field('blob_created')"));
     assertTrue(script.contains("blobUpdated == null && blobCreated == null"));
@@ -111,6 +211,9 @@ class NexusRestClientTest {
     assertFalse(script.contains("blob_created >= ?"));
     assertTrue(script.contains("Date.from(Instant.parse(since))"));
     assertTrue(script.contains("new JsonSlurper().parseText(args)"));
+    assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstance"));
+    assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstanceNames"));
+    assertFalse(script.contains("import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery"));
   }
 
   @Test
@@ -126,7 +229,7 @@ class NexusRestClientTest {
 
     NexusRestClient.RepositoryAssetPage page;
     try (NexusRestClient.RepositoryDataScriptSession session = client.openRepositoryDataScript()) {
-      page = session.readPage("maven-releases", "com/acme/demo", 1000);
+      page = session.readPage("maven-releases", "maven2", "UNKNOWN", "com/acme/demo", 1000, null);
     }
 
     assertEquals("maven-releases", page.repositoryName());
@@ -137,6 +240,9 @@ class NexusRestClientTest {
     assertEquals("com.acme", page.assets().get(0).namespace());
     assertEquals("demo", page.assets().get(0).name());
     assertEquals("1.0", page.assets().get(0).version());
+    Map<String, Object> request = OBJECT_MAPPER.readValue(nexus.lastRunBody, Map.class);
+    assertEquals("maven2", request.get("repositoryFormat"));
+    assertEquals("UNKNOWN", request.get("metadataEngine"));
     assertTrue(nexus.scriptDeleted);
   }
 
@@ -164,6 +270,11 @@ class NexusRestClientTest {
     private boolean scriptDeleted;
     private String usersPath;
     private String rolesPath;
+    private String securityExportRequestBody = "{}";
+    private int scriptCreates;
+    private int scriptRuns;
+    private String profileRunContentType = "";
+    private boolean emptyStatusBody;
 
     private FakeNexus(boolean scriptApiEnabled) {
       this.scriptApiEnabled = scriptApiEnabled;
@@ -174,6 +285,12 @@ class NexusRestClientTest {
       String path = request.uri().getPath();
       if (request.uri().getRawQuery() != null) {
         path += "?" + request.uri().getRawQuery();
+      }
+      if ("GET".equals(method) && "/service/rest/v1/status".equals(path)) {
+        if (emptyStatusBody) {
+          return empty(204);
+        }
+        return json(200, Map.of("version", "3.77.2-02"));
       }
       if ("GET".equals(method) && "/service/rest/v1/repositories".equals(path)) {
         return json(200, List.of());
@@ -225,11 +342,29 @@ class NexusRestClientTest {
         if (!scriptApiEnabled) {
           return json(410, Map.of("message", "scripts disabled"));
         }
+        scriptCreates++;
         return empty(204);
       }
       if ("POST".equals(method)
           && path.startsWith("/service/rest/v1/script/")
           && path.endsWith("/run")) {
+        scriptRuns++;
+        if (scriptRuns == 1) {
+          profileRunContentType = request.headers()
+              .firstValue("Content-Type")
+              .orElse("");
+          String result = OBJECT_MAPPER.writeValueAsString(Map.of(
+              "nexusVersion", "3.77.2-02",
+              "metadataEngine", "DATASTORE_H2",
+              "datastore", Map.of(
+                  "jdbcProduct", "H2 2.3.232",
+                  "jdbcUrl", "jdbc:h2:file:/nexus-data/db/nexus"),
+              "repositorySchema", Map.of(
+                  "columns", List.of("ID", "NAME", "RECIPE_NAME", "ATTRIBUTES")),
+              "warnings", List.of()));
+          return json(200, Map.of("name", "source-profile", "result", result));
+        }
+        securityExportRequestBody = bodyString(request).orElse("");
         String result = OBJECT_MAPPER.writeValueAsString(Map.of(
             "users", List.of(Map.of(
                 "userId", "alice",
@@ -256,12 +391,45 @@ class NexusRestClientTest {
     }
 
     private static HttpTextResponse empty(int status) {
-      return new HttpTextResponse(status, "");
+      return new HttpTextResponse(status, "", Map.of("Server", List.of("Nexus/3.77.2-02 (COMMUNITY)")));
     }
+  }
+
+  private static Optional<String> bodyString(HttpRequest request) {
+    return request.bodyPublisher().map(NexusRestClientTest::bodyString);
+  }
+
+  private static String bodyString(HttpRequest.BodyPublisher publisher) {
+    StringBuilder body = new StringBuilder();
+    CompletableFuture<Void> complete = new CompletableFuture<>();
+    publisher.subscribe(new Flow.Subscriber<>() {
+      @Override
+      public void onSubscribe(Flow.Subscription subscription) {
+        subscription.request(Long.MAX_VALUE);
+      }
+
+      @Override
+      public void onNext(ByteBuffer item) {
+        body.append(StandardCharsets.UTF_8.decode(item.duplicate()));
+      }
+
+      @Override
+      public void onError(Throwable throwable) {
+        complete.completeExceptionally(throwable);
+      }
+
+      @Override
+      public void onComplete() {
+        complete.complete(null);
+      }
+    });
+    complete.join();
+    return body.toString();
   }
 
   private static final class RepositoryDataFakeNexus {
     private boolean scriptDeleted;
+    private String lastRunBody = "{}";
 
     private HttpTextResponse send(HttpRequest request) throws IOException {
       String method = request.method();
@@ -272,6 +440,7 @@ class NexusRestClientTest {
       if ("POST".equals(method)
           && path.startsWith("/service/rest/v1/script/")
           && path.endsWith("/run")) {
+        lastRunBody = bodyString(request).orElse("");
         LinkedHashMap<String, Object> asset = new LinkedHashMap<>();
         asset.put("repositoryName", "maven-releases");
         asset.put("assetId", "#45:1");

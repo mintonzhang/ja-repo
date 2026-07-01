@@ -13,7 +13,7 @@ kkrepo needs to migrate repositories, blobs, users, groups, roles, privileges, t
 - Format implementations that moved between Pro-only, Community, feature-flagged, or unstable states.
 - Source instances whose public REST API, Script REST API, internal Java services, and database schema do not expose the same migration surface.
 
-The current migration approach can work for the historical OrientDB-centered path, but it should not be expanded by adding fragile `if version >= X` branches. Newer Nexus versions can change schema, edition gates, script behavior, and repository format internals without changing the high-level repository URL shape.
+The current migration approach can work for the historical OrientDB-centered path, but it should not be expanded by adding fragile `if version >= X` branches. Newer Nexus versions can change schema, feature availability, script behavior, and repository format internals without changing the high-level repository URL shape.
 
 ## Current Evidence
 
@@ -22,7 +22,7 @@ The local Nexus 3.77.2 reference instance was probed through the Script REST API
 Observed behavior:
 
 - Script `/run` requires `Content-Type: text/plain`; an empty body is accepted, while missing body metadata can return `415 Unsupported Media Type`.
-- Nexus reports version `3.77.2-02` Community Edition.
+- Nexus reports version `3.77.2-02`.
 - The default datastore is named `nexus` and uses JDBC `H2 2.3.232` with URL `jdbc:h2:file:/nexus-data/db/nexus`.
 - Repository table shape includes `ID`, `NAME`, `RECIPE_NAME`, `ONLINE`, `ROUTING_RULE_ID`, and `ATTRIBUTES`.
 - Cargo metadata is stored in datastore tables such as `cargo_content_repository`, `cargo_component`, `cargo_asset`, `cargo_asset_blob`, and `cargo_browse_node`.
@@ -65,7 +65,6 @@ Recommended fields:
 | Field | Description |
 | --- | --- |
 | `nexusVersion` | Reported Nexus version, such as `3.77.2-02` |
-| `edition` | OSS, Community, Pro, or unknown |
 | `buildRevision` | Build or commit identifier when available |
 | `scriptApi` | Disabled, creatable, runnable, content-type behavior, and cleanup behavior |
 | `metadataEngine` | `ORIENTDB`, `DATASTORE_H2`, `DATASTORE_POSTGRESQL`, or `UNKNOWN` |
@@ -96,9 +95,9 @@ The probe pipeline should run in layers. Each layer can contribute facts and war
    - Prefer read-only scripts for all later probes.
 
 3. Metadata engine probe
-   - Try Nexus datastore services first on newer versions.
+   - Try Nexus datastore services first when they are exposed.
    - Detect default datastore name, JDBC product, JDBC URL shape, and database major version.
-   - Fall back to OrientDB service detection for older instances.
+   - Probe OrientDB services as the expected strategy for OrientDB-backed instances.
    - Never assume external PostgreSQL credentials are available outside Nexus.
 
 4. Repository model probe
@@ -181,7 +180,7 @@ The normal user flow should not ask users to choose whether the source is above 
 
 1. User provides source URL, credentials, and optional blob-store access.
 2. kkrepo runs preflight probes.
-3. UI shows detected facts: version, edition, datastore, script status, repository recipes, security/token support, blob store support, and warnings.
+3. UI shows detected facts: version, metadata engine, datastore details, script status, repository recipes, security/token support, blob store support, and warnings.
 4. UI shows the proposed migration plan and support state for each repository.
 5. User confirms scope, dry-run, skip policies, and any manual actions.
 6. Execution records progress and validation results in MySQL.
@@ -255,7 +254,7 @@ Migration execution must stay idempotent and safe for multi-replica kkrepo deplo
 - Enable Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Docker, and Cargo only after each format has probe evidence and validation logic.
 - Start with config migration where content export is not yet safe.
 - Add content migration once asset/blob/checksum mapping is proven.
-- For Cargo specifically, keep migration disabled until Nexus 3.77.x+ H2 and PostgreSQL reference instances prove sparse index, crate blob, token, permission, checksum, and cutover behavior.
+- For Cargo specifically, keep migration enabled only when Nexus 3.77.x+ H2/PostgreSQL source profiles prove sparse index, crate blob, token, permission, checksum, and cutover behavior.
 
 ### Phase 7: Reference Matrix and Automation
 
@@ -267,7 +266,7 @@ Maintain a compatibility matrix with disposable Nexus reference instances:
 | Nexus 3.73.0 datastore/H2 | Datastore-era reference where Cargo may not be exposed in Community |
 | Nexus 3.77.x Community/H2 | Current Community reference for previously Pro-only formats such as Cargo |
 | Nexus 3.77.x or newer PostgreSQL | External datastore behavior |
-| Optional Pro or feature-flagged instance | Edition-gated behavior when available |
+| Optional Pro or feature-flagged instance | Feature-gated behavior when available |
 
 Automated checks should include:
 

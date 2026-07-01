@@ -1,0 +1,134 @@
+name: Migration E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nexus-migration-e2e:
+    name: Nexus ${{ matrix.nexus-version }} migration E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-migration-e2e'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - nexus-version: 3.29.2
+            project-suffix: nexus-3292
+            metadata-engine: orientdb
+            expected-adapter: OrientDbNexusAdapter
+            nexus-db-service: ""
+            nexus-jvm-args: ""
+            compose-profiles: ""
+            nexus-port: 28090
+            kkrepo-port: 18090
+            management-port: 18091
+            docker-port: 18183
+          - nexus-version: 3.77.2
+            project-suffix: nexus-3772
+            metadata-engine: datastore-h2
+            expected-adapter: DatastoreH2NexusAdapter
+            nexus-db-service: ""
+            nexus-jvm-args: ""
+            compose-profiles: ""
+            nexus-port: 28092
+            kkrepo-port: 18094
+            management-port: 18095
+            docker-port: 18185
+          - nexus-version: 3.77.2
+            project-suffix: nexus-3772-pg
+            metadata-engine: datastore-postgresql
+            expected-adapter: DatastorePostgresqlNexusAdapter
+            nexus-db-service: nexus-postgres
+            nexus-jvm-args: "-Dnexus.datastore.enabled=true -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://nexus-postgres:5432/nexus?currentSchema=nexus -Dnexus.datastore.nexus.username=nexus -Dnexus.datastore.nexus.password=nexus"
+            compose-profiles: nexus-postgres
+            nexus-port: 28093
+            kkrepo-port: 18096
+            management-port: 18097
+            docker-port: 18187
+    env:
+      COMPOSE_FILE: docker-compose.compat.yml
+      COMPOSE_PROJECT_NAME: kkrepo-migration-${{ matrix.project-suffix }}
+      COMPOSE_PROFILES: ${{ matrix.compose-profiles }}
+      NEXUS_COMPAT_IMAGE: sonatype/nexus3:${{ matrix.nexus-version }}
+      NEXUS_COMPAT_JVM_ARGS: ${{ matrix.nexus-jvm-args }}
+      NEXUS_COMPAT_PORT: ${{ matrix.nexus-port }}
+      NEXUS_COMPAT_BASE_URL: http://127.0.0.1:${{ matrix.nexus-port }}
+      NEXUS_COMPAT_USERNAME: admin
+      NEXUS_COMPAT_PASSWORD: "123456"
+      KKREPO_COMPAT_PORT: ${{ matrix.kkrepo-port }}
+      KKREPO_MANAGEMENT_PORT: ${{ matrix.management-port }}
+      KKREPO_COMPAT_BASE_URL: http://127.0.0.1:${{ matrix.kkrepo-port }}
+      KKREPO_MANAGEMENT_URL: http://127.0.0.1:${{ matrix.management-port }}
+      KKREPO_COMPAT_USERNAME: admin
+      KKREPO_COMPAT_PASSWORD: "12345678"
+      KKREPO_DOCKER_CONNECTOR_PORT: ${{ matrix.docker-port }}
+      KKREPO_DOCKER_HOSTED_PORT: ${{ matrix.docker-port }}
+      NEXUS_DOCKER_HTTP_PORT: ${{ matrix.docker-port }}
+      DOCKER_MIGRATION_KKREPO_REGISTRY: 127.0.0.1:${{ matrix.docker-port }}
+      DOCKER_MIGRATION_TAG: ${{ matrix.metadata-engine }}-${{ github.run_id }}-${{ github.run_attempt }}
+      MIGRATION_E2E_EXPECTED_ADAPTER: ${{ matrix.expected-adapter }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Validate migration compose file
+        run: docker compose -f "$COMPOSE_FILE" config
+
+      - name: Build candidate image
+        run: scripts/build-docker-image.sh kkrepo:compat
+
+      - name: Start databases
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait mysql ${{ matrix.nexus-db-service }}
+
+      - name: Start Nexus ${{ matrix.nexus-version }} and candidate kkrepo
+        run: docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
+
+      - name: Prepare migration fixtures
+        run: scripts/ci/live-compat-setup.sh
+
+      - name: Run Nexus metadata and repository-data migration E2E
+        run: scripts/docker-compat/migration-e2e.sh
+
+      - name: Collect migration logs
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose -f "$COMPOSE_FILE" ps > "artifacts/migration-e2e-${{ matrix.nexus-version }}-ps.txt" || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color --timestamps > "artifacts/migration-e2e-${{ matrix.nexus-version }}-compose.log" || true
+
+      - name: Upload migration logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migration-e2e-${{ matrix.nexus-version }}-logs
+          path: artifacts/
+          if-no-files-found: ignore
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" down -v

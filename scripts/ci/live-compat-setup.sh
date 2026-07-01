@@ -18,6 +18,7 @@ KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_AUTH="$KKREPO_USER:$KKREPO_PASSWORD"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
 KKREPO_DOCKER_CONNECTOR_PORT="${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
+NEXUS_DOCKER_HTTP_PORT="${NEXUS_DOCKER_HTTP_PORT:-$KKREPO_DOCKER_CONNECTOR_PORT}"
 
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 
@@ -32,6 +33,20 @@ wait_for_http() {
     sleep 1
   done
   echo "[compat] timed out waiting for $label at $url" >&2
+  return 1
+}
+
+refresh_kkrepo_auth_if_needed() {
+  if curl -m 10 -fsS -u "$KKREPO_AUTH" "$KKREPO_URL/internal/security/session" >/dev/null 2>&1; then
+    return 0
+  fi
+  if curl -m 10 -fsS -u "$KKREPO_USER:$NEXUS_PASSWORD" "$KKREPO_URL/internal/security/session" >/dev/null 2>&1; then
+    KKREPO_PASSWORD="$NEXUS_PASSWORD"
+    KKREPO_AUTH="$KKREPO_USER:$KKREPO_PASSWORD"
+    echo "[compat] kkrepo admin password now matches migrated source Nexus password"
+    return 0
+  fi
+  echo "[compat] kkrepo admin password did not authenticate with the configured or source Nexus password" >&2
   return 1
 }
 
@@ -146,6 +161,40 @@ nexus_create_repo() {
     "$endpoint" >/dev/null
 }
 
+nexus_try_create_repo() {
+  local name="$1"
+  local endpoint="$2"
+  local payload="$3"
+  local body_file status
+  if nexus_repo_exists "$name"; then
+    echo "[compat] Nexus repository exists: $name"
+    return 0
+  fi
+  body_file="$(mktemp)"
+  echo "[compat] creating optional Nexus repository: $name"
+  status="$(curl -m 30 -sS \
+    -u "$NEXUS_AUTH" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    --data "$payload" \
+    -o "$body_file" \
+    -w "%{http_code}" \
+    "$endpoint" || true)"
+  if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+    rm -f "$body_file"
+    return 0
+  fi
+  if [[ "$status" == "400" || "$status" == "404" ]]; then
+    echo "[compat] optional Nexus repository is not available on this source: $name (HTTP $status)"
+    rm -f "$body_file"
+    return 0
+  fi
+  echo "[compat] optional Nexus repository create failed: $name HTTP $status" >&2
+  cat "$body_file" >&2 || true
+  rm -f "$body_file"
+  return 1
+}
+
 ensure_nexus_repositories() {
   nexus_create_repo "maven-releases" "$NEXUS_URL/service/rest/v1/repositories/maven/hosted" '{
     "name":"maven-releases",
@@ -199,6 +248,19 @@ ensure_nexus_repositories() {
     "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
     "group":{"memberNames":["npm-hosted","npm-proxy"]}
   }'
+
+  nexus_create_repo "docker-hosted" "$NEXUS_URL/service/rest/v1/repositories/docker/hosted" "{
+    \"name\":\"docker-hosted\",
+    \"online\":true,
+    \"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true,\"writePolicy\":\"ALLOW\"},
+    \"docker\":{\"v1Enabled\":false,\"forceBasicAuth\":true,\"httpPort\":$NEXUS_DOCKER_HTTP_PORT}
+  }"
+
+  nexus_try_create_repo "cargo-hosted" "$NEXUS_URL/service/rest/v1/repositories/cargo/hosted" '{
+    "name":"cargo-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW"}
+  }'
 }
 
 initialize_kkrepo_admin() {
@@ -208,7 +270,7 @@ initialize_kkrepo_admin() {
   bootstrap_json="$(curl -m 10 -fsS "$KKREPO_URL/internal/security/bootstrap")"
   if [[ "$bootstrap_json" != *'"required":true'* ]]; then
     echo "[compat] kkrepo admin bootstrap is already complete"
-    curl -m 10 -fsS -u "$KKREPO_AUTH" "$KKREPO_URL/internal/security/session" >/dev/null
+    refresh_kkrepo_auth_if_needed
     return 0
   fi
 

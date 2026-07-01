@@ -38,7 +38,7 @@ bash quickstart.sh
 
 默认会启动：
 
-- `ghcr.io/klboke/kkrepo:0.1.0`
+- `ghcr.io/klboke/kkrepo:0.2.0`
 - MySQL 8.0
 - 用于本地试用的持久化 MySQL volume 和 File blob storage volume
 
@@ -124,10 +124,10 @@ server/target/kkrepo-server-<version>.jar
 
 ## Docker 镜像
 
-拉取首个公开发行镜像：
+拉取最新公开发行镜像：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.1.0
+docker pull ghcr.io/klboke/kkrepo:0.2.0
 ```
 
 也可以使用 `latest` 跟随最新公开发行版本：

@@ -79,6 +79,9 @@ public class BrowseAssetDetailService {
       String path,
       String sourceRepositoryName) {
     String storagePath = storagePath(visibleRepository.format(), path);
+    if (isCargoDynamicConfig(visibleRepository, storagePath)) {
+      return cargoDynamicConfigDetail(visibleRepository);
+    }
     ResolvedAsset resolved = resolveSourceAsset(visibleRepository, sourceRepositoryName, storagePath);
     RepositoryRecord source = resolved.source();
     AssetRecord asset = resolved.asset();
@@ -113,6 +116,36 @@ public class BrowseAssetDetailService {
         content,
         docker,
         npm,
+        provenance);
+  }
+
+  private static boolean isCargoDynamicConfig(RepositoryRecord repository, String storagePath) {
+    return repository.format() == RepositoryFormat.CARGO && "config.json".equals(storagePath);
+  }
+
+  private static BrowseAssetDetail cargoDynamicConfigDetail(RepositoryRecord repository) {
+    LinkedHashMap<String, Object> content = new LinkedHashMap<>();
+    content.put("generated", true);
+    content.put("last_modified", null);
+    LinkedHashMap<String, Object> provenance = new LinkedHashMap<>();
+    provenance.put("source", "kkrepo-cargo-sparse-registry");
+    provenance.put("dynamic", true);
+    provenance.put("hashes_not_verified", false);
+    return new BrowseAssetDetail(
+        repository.name(),
+        repository.name(),
+        "config.json",
+        "config.json",
+        null,
+        "application/json",
+        null,
+        "/repository/" + repository.name() + "/config.json",
+        "kkrepo",
+        null,
+        Map.of(),
+        content,
+        Map.of(),
+        Map.of(),
         provenance);
   }
 

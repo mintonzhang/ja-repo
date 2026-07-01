@@ -130,7 +130,7 @@ Docker hosted 仓库迁移走 Nexus Repository Data 流程。Docker Registry V1 
 
 Cargo hosted、proxy、group 仓库已支持 Cargo sparse registry 协议。kkrepo 支持 `cargo publish`、fetch/download、yank/unyank、`cargo search`、`CargoToken` 认证，以及 hosted `.crate` 的 UI/API 上传。
 
-Nexus Cargo 仓库迁移当前仍为待定。Nexus Community Cargo 支持从 3.77.x datastore 时代的 H2/PostgreSQL 形态开始，因此不要把 Cargo 仓库视为已被现有 Nexus 迁移流程覆盖。
+对于 preflight 已确认 Cargo content model 的 datastore 时代 H2/PostgreSQL 源端，Nexus Cargo hosted 仓库迁移已支持。未知 schema 指纹会在迁移计划中 fail closed，OrientDB 源端不会启用 Cargo 内容导出。
 
 ## kkrepo 可以用于生产吗？
 

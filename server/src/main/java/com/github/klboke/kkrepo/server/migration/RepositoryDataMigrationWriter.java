@@ -234,6 +234,9 @@ class RepositoryDataMigrationWriter {
     BlobReference ref = upload.reference();
     Digests digests = upload.digests();
     String blobRef = BlobReferenceCodec.format(ref);
+    MigratedCargoMetadata cargoMetadata = repository.format() == RepositoryFormat.CARGO
+        ? migratedCargoMetadata(source, upload)
+        : null;
 
     Optional<AssetRecord> existing = assetDao.findAssetByPath(repository.id(), source.sourcePath());
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
@@ -268,10 +271,10 @@ class RepositoryDataMigrationWriter {
     }
 
     Long componentId = componentIdOverride == null
-        ? upsertComponent(repository, source, lastUpdatedAt)
+        ? upsertComponent(repository, source, lastUpdatedAt, digests, cargoMetadata)
         : componentIdOverride;
     String kind = assetKind(repository.format(), source);
-    Map<String, Object> attributes = assetAttributes(source, digests);
+    Map<String, Object> attributes = assetAttributes(source, digests, cargoMetadata);
     AssetRecord persistedAsset;
     if (existing.isPresent()) {
       persistedAsset = updateExistingAsset(existing.get(), componentId, blobId, kind, contentType,
@@ -435,7 +438,7 @@ class RepositoryDataMigrationWriter {
     }
     putIfPresent(attributes, "sourceAssetId", source.sourceAssetId());
     putIfPresent(attributes, "sourceBlobRef", source.sourceBlobRef());
-    return Map.copyOf(attributes);
+    return attributes;
   }
 
   private static byte[] readTemp(DigestedUpload upload) {
@@ -449,7 +452,12 @@ class RepositoryDataMigrationWriter {
   private Long upsertComponent(
       RepositoryRecord repository,
       RepositoryDataMigrationAssetRecord source,
-      Instant lastUpdatedAt) {
+      Instant lastUpdatedAt,
+      Digests digests,
+      MigratedCargoMetadata cargoMetadata) {
+    if (repository.format() == RepositoryFormat.CARGO) {
+      return upsertCargoComponent(repository, source, lastUpdatedAt, digests, cargoMetadata);
+    }
     if (source.name() == null || source.name().isBlank()) {
       return null;
     }
@@ -463,6 +471,29 @@ class RepositoryDataMigrationWriter {
         componentKind(repository.format(), source),
         HashColumns.componentCoordinateHash(blankToNull(source.namespace()), source.name(), blankToNull(source.version())),
         componentAttributes(source),
+        lastUpdatedAt);
+    return componentDao.upsertReturningId(component);
+  }
+
+  private Long upsertCargoComponent(
+      RepositoryRecord repository,
+      RepositoryDataMigrationAssetRecord source,
+      Instant lastUpdatedAt,
+      Digests digests,
+      MigratedCargoMetadata cargoMetadata) {
+    if (cargoMetadata == null) {
+      return null;
+    }
+    ComponentRecord component = new ComponentRecord(
+        null,
+        repository.id(),
+        repository.format(),
+        null,
+        cargoMetadata.normalizedName(),
+        cargoMetadata.versionKey(),
+        "crate",
+        HashColumns.componentCoordinateHash(null, cargoMetadata.normalizedName(), cargoMetadata.versionKey()),
+        cargoMetadata.componentAttributes(digests.sha256(), source.sourcePath(), migratedCargoYanked(source)),
         lastUpdatedAt);
     return componentDao.upsertReturningId(component);
   }
@@ -609,7 +640,10 @@ class RepositoryDataMigrationWriter {
     return Map.copyOf(attributes);
   }
 
-  private static Map<String, Object> assetAttributes(RepositoryDataMigrationAssetRecord source, Digests digests) {
+  private static Map<String, Object> assetAttributes(
+      RepositoryDataMigrationAssetRecord source,
+      Digests digests,
+      MigratedCargoMetadata cargoMetadata) {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("source", "nexus-repository-data-migration");
     putIfPresent(attributes, "sourceAssetId", source.sourceAssetId());
@@ -624,6 +658,10 @@ class RepositoryDataMigrationWriter {
     Map<String, Object> docker = dockerAssetAttributes(source, digests);
     if (!docker.isEmpty()) {
       attributes.put("docker", docker);
+    }
+    if (cargoMetadata != null) {
+      attributes.put("cargo", cargoMetadata.assetAttributes());
+      attributes.put("cratePath", source.sourcePath());
     }
     return Map.copyOf(attributes);
   }
@@ -688,7 +726,7 @@ class RepositoryDataMigrationWriter {
       case RUBYGEMS -> source.sourcePath().endsWith(".gem") ? "PACKAGE" : "ASSET";
       case YUM -> source.sourcePath().endsWith(".rpm") ? "PACKAGE" : "METADATA";
       case DOCKER -> dockerAssetKind(source.sourcePath());
-      case CARGO -> throw new IllegalArgumentException("Cargo migration is not implemented");
+      case CARGO -> cargoAssetKind(source.sourcePath());
       case RAW -> "asset";
     };
   }
@@ -730,6 +768,69 @@ class RepositoryDataMigrationWriter {
       return "TAGS";
     }
     return "ASSET";
+  }
+
+  private static String cargoAssetKind(String path) {
+    if (path == null) {
+      return "ASSET";
+    }
+    if (isCargoCrateAssetPath(path)) {
+      return "crate";
+    }
+    if (path.endsWith("config.json")) {
+      return "config";
+    }
+    return "index";
+  }
+
+  private static MigratedCargoMetadata migratedCargoMetadata(
+      RepositoryDataMigrationAssetRecord source,
+      DigestedUpload upload) {
+    if (source == null || !isCargoCrateAssetPath(source.sourcePath())) {
+      return null;
+    }
+    return MigratedCargoMetadata.fromCrate(upload.tempFile());
+  }
+
+  private static boolean isCargoCrateAssetPath(String path) {
+    List<String> segments = normalizedSegments(path);
+    if (segments.size() >= 4
+        && "crates".equals(segments.get(0))
+        && "download".equals(segments.get(3))) {
+      return true;
+    }
+    return path != null && path.endsWith(".crate");
+  }
+
+  private static boolean migratedCargoYanked(RepositoryDataMigrationAssetRecord source) {
+    Object componentAttributes = source.metadata() == null ? null : source.metadata().get("componentAttributes");
+    if (componentAttributes instanceof Map<?, ?> componentMap) {
+      Object entry = componentMap.get("indexEntry");
+      if (entry instanceof Map<?, ?> entryMap && entryMap.get("yanked") != null) {
+        return bool(entryMap.get("yanked"));
+      }
+      if (componentMap.get("yanked") != null) {
+        return bool(componentMap.get("yanked"));
+      }
+    }
+    Object sourceAttributes = source.metadata() == null ? null : source.metadata().get("attributes");
+    if (sourceAttributes instanceof Map<?, ?> attributesMap) {
+      Object nested = attributesMap.get("sourceAssetAttributes");
+      if (nested instanceof Map<?, ?> nestedMap && nestedMap.get("yanked") != null) {
+        return bool(nestedMap.get("yanked"));
+      }
+      if (attributesMap.get("yanked") != null) {
+        return bool(attributesMap.get("yanked"));
+      }
+    }
+    return false;
+  }
+
+  private static boolean bool(Object value) {
+    if (value instanceof Boolean bool) {
+      return bool;
+    }
+    return value != null && Boolean.parseBoolean(String.valueOf(value));
   }
 
   static Optional<DockerManifestMigrationTarget> dockerManifestMigrationTarget(String path) {

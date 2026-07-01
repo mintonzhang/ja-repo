@@ -96,6 +96,7 @@ public class BrowseController {
         }
       }
     }
+    addCargoDynamicRootEntries(repo, browsePath, merged);
     // Final ordering: directories first then files, alphabetical within each bucket.
     List<BrowseEntry> entries = new ArrayList<>(merged.values());
     entries.sort((a, b) -> {
@@ -103,6 +104,25 @@ public class BrowseController {
       return a.path().compareTo(b.path());
     });
     return new BrowseListing(repo.name(), browsePath.publicParent(), entries);
+  }
+
+  private static void addCargoDynamicRootEntries(
+      RepositoryRecord repo,
+      BrowsePath browsePath,
+      LinkedHashMap<String, BrowseEntry> merged) {
+    if (repo.format() != RepositoryFormat.CARGO || !browsePath.publicParent().isEmpty()) {
+      return;
+    }
+    merged.putIfAbsent("config.json", new BrowseEntry(
+        "config.json",
+        "config.json",
+        repo.name(),
+        true,
+        null,
+        "application/json",
+        null,
+        null,
+        "/repository/" + repo.name() + "/config.json"));
   }
 
   @GetMapping("/{repository}/attributes")

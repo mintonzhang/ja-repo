@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
@@ -88,6 +89,29 @@ class BrowseAssetDetailServiceTest {
 
     assertEquals("/repository/pypi-hosted/packages/demo/1.0.0/demo-1.0.0-py3-none-any.whl", detail.downloadUrl());
     assertEquals(List.of(key(repository.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void cargoDynamicConfigDetailDoesNotRequireStoredAssetBlob() {
+    RepositoryRecord repository = repository(1L, "cargo-hosted", RepositoryFormat.CARGO, RepositoryType.HOSTED);
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, "config.json", null);
+
+    assertEquals("cargo-hosted", detail.repository());
+    assertEquals("config.json", detail.path());
+    assertEquals("config.json", detail.name());
+    assertEquals("application/json", detail.contentType());
+    assertEquals("/repository/cargo-hosted/config.json", detail.downloadUrl());
+    assertEquals("kkrepo", detail.uploader());
+    assertTrue((Boolean) detail.content().get("generated"));
+    assertTrue((Boolean) detail.provenance().get("dynamic"));
+    assertEquals(List.of(), assets.pathLookups);
   }
 
   @Test

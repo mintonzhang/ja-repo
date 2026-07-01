@@ -46,34 +46,59 @@ public class NexusRestClient {
       "application/vnd.oci.artifact.manifest.v1+json");
   private static final String LOCAL_SECURITY_EXPORT_SCRIPT = """
       import groovy.json.JsonOutput
+      import groovy.json.JsonSlurper
       import java.io.ByteArrayInputStream
-      import org.sonatype.nexus.common.io.ObjectInputStreamWithClassLoader
-      import org.sonatype.nexus.orient.DatabaseInstance
-      import org.sonatype.nexus.orient.DatabaseInstanceNames
-      import org.sonatype.nexus.security.config.SecurityConfigurationManager
-      import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery
+      import java.util.Locale
 
-      def security
-      try {
-        security = container.lookup(SecurityConfigurationManager.class.name)
-      } catch (Throwable ignored) {
-        security = container.lookup(SecurityConfigurationManager.class, 'default')
-      }
-      def users = security.listUsers().collect { user ->
-        [
-          userId: user.id,
-          source: 'default',
-          passwordHash: user.password
-        ]
-      }
+      def request = args == null || args.trim().isEmpty()
+          ? [:]
+          : new JsonSlurper().parseText(args)
+      def metadataEngine = String.valueOf(request.metadataEngine ?: '').trim().toUpperCase(Locale.ROOT)
       def warnings = []
+      def users = []
+      try {
+        def security = null
+        try {
+          security = container.lookup('org.sonatype.nexus.security.config.SecurityConfigurationManager')
+        } catch (Throwable ignored) {
+          try {
+            security = container.lookup('org.sonatype.nexus.security.config.SecurityConfigurationManager', 'default')
+          } catch (Throwable ignoredAgain) {
+            security = null
+          }
+        }
+        if (security == null) {
+          warnings << 'Source Nexus script API did not expose local password hashes: SecurityConfigurationManager unavailable'
+        } else {
+          users = security.listUsers().collect { user ->
+            def passwordHash = null
+            try {
+              passwordHash = user.password
+            } catch (Throwable ignored) {
+              passwordHash = null
+            }
+            [
+              userId: user.id,
+              source: 'default',
+              passwordHash: passwordHash
+            ]
+          }
+        }
+      } catch (Throwable e) {
+        warnings << 'Source Nexus script API did not expose local password hashes: ' + e.class.name + ': ' + String.valueOf(e.message)
+        users = []
+      }
       def principalDetails = { bytes ->
         if (bytes == null) {
           return [:]
         }
         try {
           def uberClassLoader = container.lookup(ClassLoader.class, 'nexus-uber')
-          def input = new ObjectInputStreamWithClassLoader(new ByteArrayInputStream(bytes), uberClassLoader)
+          def streamClass = this.class.classLoader
+              .loadClass('org.sonatype.nexus.common.io.ObjectInputStreamWithClassLoader')
+          def input = streamClass
+              .getConstructor(java.io.InputStream.class, ClassLoader.class)
+              .newInstance(new ByteArrayInputStream(bytes), uberClassLoader)
           try {
             def principals = input.readObject()
             return [
@@ -89,29 +114,139 @@ public class NexusRestClient {
         }
       }
       def apiKeys = []
-      try {
-        def securityDatabase
+      def apiKeyDomains = { apiKeyService ->
+        def domains = new LinkedHashSet()
         try {
-          securityDatabase = container.lookup(DatabaseInstance.class, DatabaseInstanceNames.SECURITY)
+          ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken'].each { domain ->
+            try {
+              if (apiKeyService.count(domain) > 0) {
+                domains << domain
+              }
+            } catch (Throwable ignored) {
+            }
+          }
         } catch (Throwable ignored) {
-          securityDatabase = container.lookup(DatabaseInstance.class, 'security')
+        }
+        try {
+          def datastoreManager = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')
+          def datastore = null
+          try {
+            def selected = datastoreManager.get('nexus')
+            datastore = selected == null ? null : selected.orElse(null)
+          } catch (Throwable ignored) {
+            datastore = null
+          }
+          if (datastore != null) {
+            def connection = datastore.openConnection()
+            try {
+              def rs = connection.createStatement().executeQuery('select distinct domain from api_key_v2 order by domain')
+              try {
+                while (rs.next()) {
+                  domains << rs.getString(1)
+                }
+              } finally {
+                rs.close()
+              }
+            } finally {
+              connection.close()
+            }
+          }
+        } catch (Throwable ignored) {
+        }
+        return domains
+      }
+      def exportApiKeysFromService = { ->
+        def apiKeyService = container.lookup('org.sonatype.nexus.security.authc.apikey.ApiKeyLowLevelService')
+        apiKeyDomains(apiKeyService).each { domain ->
+          apiKeyService.browse(domain).each { apiKey ->
+            apiKeys << [
+              domain: domain,
+              api_key: apiKey.apiKey == null ? null : new String(apiKey.apiKey),
+              primary_principal: apiKey.primaryPrincipal,
+              principals: [
+                primaryPrincipal: apiKey.primaryPrincipal
+              ],
+              created: apiKey.created == null ? null : String.valueOf(apiKey.created),
+              sourceStore: 'ApiKeyLowLevelService'
+            ]
+          }
+        }
+      }
+      def exportApiKeysFromOrientDb = { ->
+        def securityDatabase
+        def databaseClass = null
+        try {
+          databaseClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstance')
+          def namesClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')
+          def securityName = namesClass.getField('SECURITY').get(null)
+          securityDatabase = container.lookup(databaseClass, securityName)
+        } catch (Throwable ignored) {
+          try {
+            securityDatabase = databaseClass == null
+                ? container.lookup('org.sonatype.nexus.orient.DatabaseInstance', 'security')
+                : container.lookup(databaseClass, 'security')
+          } catch (Throwable ignoredAgain) {
+            securityDatabase = null
+          }
+        }
+        if (securityDatabase == null) {
+          throw new IllegalStateException('OrientDB security database is unavailable on this source metadata engine')
         }
         def db = securityDatabase.connect()
         try {
-          db.query(new OSQLSynchQuery('select from api_key')).each { document ->
+          def queryClass = this.class.classLoader
+              .loadClass('com.orientechnologies.orient.core.sql.query.OSQLSynchQuery')
+          def query = queryClass.getConstructor(String.class).newInstance('select from api_key')
+          db.query(query).each { document ->
             def principals = principalDetails(document.field('principals'))
             apiKeys << [
               domain: document.field('domain'),
               api_key: document.field('api_key'),
               primary_principal: document.field('primary_principal'),
-              principals: principals
+              principals: principals,
+              sourceStore: 'OrientDB'
             ]
           }
         } finally {
           db.close()
         }
+      }
+      def apiKeyServiceError = null
+      if (metadataEngine == 'ORIENTDB') {
+        try {
+          exportApiKeysFromOrientDb()
+        } catch (Throwable e) {
+          warnings << ("Source Nexus script API did not expose API keys through the OrientDB security strategy: "
+              + e.class.name + ": " + String.valueOf(e.message))
+          apiKeys = []
+        }
+        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+      }
+      if (metadataEngine.startsWith('DATASTORE')) {
+        try {
+          exportApiKeysFromService()
+        } catch (Throwable e) {
+          warnings << ("Source Nexus script API did not expose API keys through the datastore security strategy: "
+              + e.class.name + ": " + String.valueOf(e.message))
+          apiKeys = []
+        }
+        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+      }
+      try {
+        exportApiKeysFromService()
+        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+      } catch (Throwable ignored) {
+        apiKeyServiceError = ignored
+        apiKeys = []
+      }
+      try {
+        exportApiKeysFromOrientDb()
       } catch (Throwable e) {
-        warnings << "Source Nexus script API did not expose API keys: " + e.class.name + ": " + String.valueOf(e.message)
+        def serviceMessage = apiKeyServiceError == null
+            ? ''
+            : '; ApiKeyLowLevelService strategy failed: ' + apiKeyServiceError.class.name + ': ' + String.valueOf(apiKeyServiceError.message)
+        warnings << ("Source Nexus script API did not expose API keys through the supported security strategies: "
+            + e.class.name + ": " + String.valueOf(e.message) + serviceMessage)
         apiKeys = []
       }
       return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
@@ -120,11 +255,6 @@ public class NexusRestClient {
       import groovy.json.JsonOutput
       import groovy.json.JsonSlurper
       import java.time.Instant
-      import org.sonatype.nexus.orient.DatabaseInstance
-      import org.sonatype.nexus.orient.DatabaseInstanceNames
-      import com.orientechnologies.orient.core.id.ORID
-      import com.orientechnologies.orient.core.record.impl.ODocument
-      import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery
 
       def request = args == null || args.trim().isEmpty()
           ? [:]
@@ -133,30 +263,52 @@ public class NexusRestClient {
       if (repositoryName.isEmpty()) {
         throw new IllegalArgumentException('repositoryName is required')
       }
+      def repositoryFormat = String.valueOf(request.repositoryFormat ?: '').trim().toLowerCase()
+      def metadataEngine = String.valueOf(request.metadataEngine ?: '').trim().toUpperCase()
       int pageSize = Math.max(1, Math.min(((request.pageSize ?: 1000) as Integer), 5000))
       def afterPath = request.afterPath == null ? '' : String.valueOf(request.afterPath)
       def since = request.since == null ? '' : String.valueOf(request.since).trim()
       def sinceDate = since.isEmpty() ? null : Date.from(Instant.parse(since))
-
-      def componentDatabase
-      try {
-        componentDatabase = container.lookup(DatabaseInstance.class, DatabaseInstanceNames.COMPONENT)
-      } catch (Throwable ignored) {
-        componentDatabase = container.lookup(DatabaseInstance.class, 'component')
-      }
 
       def normalize
       normalize = { value ->
         if (value == null) {
           return null
         }
+        if (value instanceof byte[]) {
+          try {
+            return normalize(new JsonSlurper().parseText(new String(value, 'UTF-8')))
+          } catch (Throwable ignored) {
+            return String.valueOf(value)
+          }
+        }
+        if (value instanceof CharSequence) {
+          def raw = String.valueOf(value)
+          def trimmed = raw.trim()
+          if ((trimmed.startsWith('{') && trimmed.endsWith('}'))
+              || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+              return normalize(new JsonSlurper().parseText(trimmed))
+            } catch (Throwable ignored) {
+            }
+          }
+          return raw
+        }
         if (value instanceof Date) {
           return value.toInstant().toString()
         }
-        if (value instanceof ORID) {
+        try {
+          if (value instanceof java.time.temporal.TemporalAccessor) {
+            return String.valueOf(value)
+          }
+        } catch (Throwable ignored) {
+        }
+        def valueClassName = value.getClass().name
+        if (valueClassName == 'com.orientechnologies.orient.core.id.ORecordId'
+            || valueClassName == 'com.orientechnologies.orient.core.id.ORID') {
           return String.valueOf(value)
         }
-        if (value instanceof ODocument) {
+        if (valueClassName == 'com.orientechnologies.orient.core.record.impl.ODocument') {
           return normalize(value.toMap())
         }
         if (value instanceof Map) {
@@ -177,7 +329,91 @@ public class NexusRestClient {
         def s = String.valueOf(value)
         return s.isEmpty() ? null : s
       }
-      def changedSince = { asset ->
+      def isoValue = { value ->
+        if (value == null) {
+          return null
+        }
+        if (value instanceof Date) {
+          return value.toInstant().toString()
+        }
+        try {
+          if (value instanceof java.time.temporal.TemporalAccessor) {
+            return String.valueOf(value)
+          }
+        } catch (Throwable ignored) {
+        }
+        return String.valueOf(value)
+      }
+      def instantValue = { value ->
+        if (value == null) {
+          return null
+        }
+        if (value instanceof Date) {
+          return value.toInstant()
+        }
+        try {
+          if (value instanceof java.time.Instant) {
+            return value
+          }
+          if (value instanceof java.time.OffsetDateTime) {
+            return value.toInstant()
+          }
+          if (value instanceof java.time.ZonedDateTime) {
+            return value.toInstant()
+          }
+          if (value instanceof java.time.LocalDateTime) {
+            return value.atZone(java.time.ZoneOffset.UTC).toInstant()
+          }
+        } catch (Throwable ignored) {
+        }
+        try {
+          return Instant.parse(String.valueOf(value))
+        } catch (Throwable ignored) {
+          return null
+        }
+      }
+      def datastorePrefix = { format ->
+        def prefixes = [
+          maven2: 'MAVEN2',
+          npm: 'NPM',
+          pypi: 'PYPI',
+          go: 'GO',
+          helm: 'HELM',
+          docker: 'DOCKER',
+          nuget: 'NUGET',
+          rubygems: 'RUBYGEMS',
+          yum: 'YUM',
+          raw: 'RAW',
+          cargo: 'CARGO'
+        ]
+        return prefixes[format]
+      }
+      def sourcePathCursor = { value ->
+        def path = text(value)
+        if (path == null || path.startsWith('/')) {
+          return path
+        }
+        return '/' + path
+      }
+      def repositoryRelativePath = { value ->
+        def path = text(value)
+        while (path != null && path.startsWith('/')) {
+          path = path.substring(1)
+        }
+        return path
+      }
+      def emptyPage = { warnings ->
+        return JsonOutput.toJson([
+          repositoryName: repositoryName,
+          afterPath: afterPath,
+          since: since,
+          nextAfterPath: afterPath,
+          complete: true,
+          assets: [],
+          warnings: warnings
+        ])
+      }
+      def changedSinceOrient = { asset ->
         if (sinceDate == null) {
           return true
         }
@@ -195,19 +431,43 @@ public class NexusRestClient {
         }
         return false
       }
+      def changedSinceDatastore = { row ->
+        if (sinceDate == null) {
+          return true
+        }
+        def sinceInstant = sinceDate.toInstant()
+        def blobUpdated = instantValue(row.blobUpdated)
+        if (blobUpdated != null && !blobUpdated.isBefore(sinceInstant)) {
+          return true
+        }
+        def blobCreated = instantValue(row.blobCreated)
+        if (blobCreated != null && !blobCreated.isBefore(sinceInstant)) {
+          return true
+        }
+        if (blobUpdated == null && blobCreated == null) {
+          def lastUpdated = instantValue(row.lastUpdated)
+          return lastUpdated != null && !lastUpdated.isBefore(sinceInstant)
+        }
+        return false
+      }
 
-      def db = componentDatabase.connect()
-      try {
-        def buckets = db.query(new OSQLSynchQuery('select from bucket where repository_name = ?'), repositoryName)
+      def exportOrientDb = { ->
+        def databaseClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstance')
+        def componentDatabase
+        try {
+          def namesClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')
+          def componentName = namesClass.getField('COMPONENT').get(null)
+          componentDatabase = container.lookup(databaseClass, componentName)
+        } catch (Throwable ignored) {
+          componentDatabase = container.lookup(databaseClass, 'component')
+        }
+        def queryClass = this.class.classLoader
+            .loadClass('com.orientechnologies.orient.core.sql.query.OSQLSynchQuery')
+        def db = componentDatabase.connect()
+        try {
+        def buckets = db.query(queryClass.getConstructor(String.class).newInstance('select from bucket where repository_name = ?'), repositoryName)
         if (buckets == null || buckets.isEmpty()) {
-          return JsonOutput.toJson([
-            repositoryName: repositoryName,
-            afterPath: afterPath,
-            nextAfterPath: afterPath,
-            complete: true,
-            assets: [],
-            warnings: ['source repository bucket not found: ' + repositoryName]
-          ])
+          return emptyPage(['source repository bucket not found: ' + repositoryName])
         }
         def bucket = buckets[0]
         def query
@@ -216,16 +476,16 @@ public class NexusRestClient {
             ? 'select from asset where bucket = ? order by name limit ' + pageSize
             : 'select from asset where bucket = ? and name > ? order by name limit ' + pageSize
         rows = afterPath.isEmpty()
-            ? db.query(new OSQLSynchQuery(query), bucket.getIdentity())
-            : db.query(new OSQLSynchQuery(query), bucket.getIdentity(), afterPath)
+            ? db.query(queryClass.getConstructor(String.class).newInstance(query), bucket.getIdentity())
+            : db.query(queryClass.getConstructor(String.class).newInstance(query), bucket.getIdentity(), afterPath)
         rows = rows ?: []
         def assets = []
         rows.each { asset ->
-          if (!changedSince(asset)) {
+          if (!changedSinceOrient(asset)) {
             return
           }
           def component = asset.field('component')
-          if (component instanceof ORID) {
+          if (component != null && component.getClass().name.contains('orient.core.id')) {
             component = db.load(component)
           }
           def componentAttributes = component == null ? [:] : normalize(component.field('attributes') ?: [:])
@@ -266,6 +526,379 @@ public class NexusRestClient {
       } finally {
         db.close()
       }
+      }
+
+      def exportDatastore = { ->
+        def prefix = datastorePrefix(repositoryFormat)
+        if (prefix == null) {
+          return emptyPage(['datastore repository content exporter does not support format: ' + repositoryFormat])
+        }
+        def datastoreManager = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')
+        def selected = datastoreManager.get('nexus')
+        def datastore = selected == null ? null : selected.orElse(null)
+        if (datastore == null) {
+          return emptyPage(['datastore nexus store not found'])
+        }
+        def connection = datastore.openConnection()
+        try {
+          def repositoryId = null
+          def repositoryStatement = connection.prepareStatement('select id from repository where name = ?')
+          try {
+            repositoryStatement.setString(1, repositoryName)
+            def repositoryRows = repositoryStatement.executeQuery()
+            try {
+              if (repositoryRows.next()) {
+                repositoryId = repositoryRows.getObject(1)
+              }
+            } finally {
+              repositoryRows.close()
+            }
+          } finally {
+            repositoryStatement.close()
+          }
+          if (repositoryId == null) {
+            return emptyPage(['source repository not found: ' + repositoryName])
+          }
+          def contentRepositoryId = null
+          def contentRepositorySql = 'select repository_id from ' + prefix + '_CONTENT_REPOSITORY where config_repository_id = ?'
+          def contentRepositoryStatement = connection.prepareStatement(contentRepositorySql)
+          try {
+            contentRepositoryStatement.setObject(1, repositoryId)
+            def contentRepositoryRows = contentRepositoryStatement.executeQuery()
+            try {
+              if (contentRepositoryRows.next()) {
+                contentRepositoryId = contentRepositoryRows.getObject(1)
+              }
+            } finally {
+              contentRepositoryRows.close()
+            }
+          } finally {
+            contentRepositoryStatement.close()
+          }
+          if (contentRepositoryId == null) {
+            return emptyPage(['source content repository not found: ' + repositoryName + ' (' + prefix + ')'])
+          }
+          def datastoreAfterPath = sourcePathCursor(afterPath)
+          def sql = '''
+              select
+                a.asset_id as asset_id,
+                a.path as path,
+                a.kind as asset_kind,
+                a.component_id as asset_component_id,
+                a.last_downloaded as last_downloaded,
+                a.attributes as asset_attributes,
+                a.created as asset_created,
+                a.last_updated as asset_last_updated,
+                b.asset_blob_id as asset_blob_id,
+                b.blob_ref as blob_ref,
+                b.blob_size as blob_size,
+                b.content_type as content_type,
+                b.checksums as checksums,
+                b.blob_created as blob_created,
+                b.created_by as created_by,
+                b.created_by_ip as created_by_ip,
+                b.added_to_repository as blob_updated,
+                c.component_id as component_id,
+                c.namespace as component_namespace,
+                c.name as component_name,
+                c.kind as component_kind,
+                c.version as component_version,
+                c.attributes as component_attributes,
+                c.created as component_created,
+                c.last_updated as component_last_updated
+              from ''' + prefix + '''_ASSET a
+              left join ''' + prefix + '''_ASSET_BLOB b on a.asset_blob_id = b.asset_blob_id
+              left join ''' + prefix + '''_COMPONENT c on a.component_id = c.component_id
+              where a.repository_id = ? ''' + (datastoreAfterPath == null ? '' : 'and a.path > ? ') + '''
+              order by a.path
+              limit ''' + pageSize
+          def statement = connection.prepareStatement(sql)
+          try {
+            statement.setObject(1, contentRepositoryId)
+            if (datastoreAfterPath != null) {
+              statement.setString(2, datastoreAfterPath)
+            }
+            def rows = statement.executeQuery()
+            try {
+              def assets = []
+              def rowCount = 0
+              def lastPath = afterPath
+              while (rows.next()) {
+                rowCount++
+                def row = [
+                  blobUpdated: rows.getObject('blob_updated'),
+                  blobCreated: rows.getObject('blob_created'),
+                  lastUpdated: rows.getObject('asset_last_updated')
+                ]
+                lastPath = text(rows.getObject('path')) ?: lastPath
+                def path = repositoryRelativePath(lastPath)
+                if (!changedSinceDatastore(row)) {
+                  continue
+                }
+                def checksums = normalize(rows.getObject('checksums'))
+                assets << [
+                  repositoryName: repositoryName,
+                  assetId: String.valueOf(rows.getObject('asset_id')),
+                  componentId: rows.getObject('component_id') == null ? null : String.valueOf(rows.getObject('component_id')),
+                  path: path,
+                  format: repositoryFormat,
+                  namespace: text(rows.getObject('component_namespace')),
+                  name: text(rows.getObject('component_name')),
+                  version: text(rows.getObject('component_version')),
+                  assetKind: text(rows.getObject('asset_kind')),
+                  contentType: text(rows.getObject('content_type')),
+                  size: rows.getObject('blob_size'),
+                  sourceBlobRef: text(rows.getObject('blob_ref')),
+                  lastUpdated: isoValue(rows.getObject('asset_last_updated')),
+                  lastDownloaded: isoValue(rows.getObject('last_downloaded')),
+                  blobCreated: isoValue(rows.getObject('blob_created')),
+                  blobUpdated: isoValue(rows.getObject('blob_updated')),
+                  createdBy: text(rows.getObject('created_by')),
+                  createdByIp: text(rows.getObject('created_by_ip')),
+                  attributes: [
+                    sourceAssetAttributes: normalize(rows.getObject('asset_attributes')),
+                    checksums: checksums
+                  ],
+                  componentAttributes: normalize(rows.getObject('component_attributes') ?: [:])
+                ]
+              }
+              return JsonOutput.toJson([
+                repositoryName: repositoryName,
+                afterPath: afterPath,
+                since: since,
+                nextAfterPath: repositoryRelativePath(lastPath),
+                complete: rowCount < pageSize,
+                assets: assets,
+                warnings: []
+              ])
+            } finally {
+              rows.close()
+            }
+          } finally {
+            statement.close()
+          }
+        } finally {
+          connection.close()
+        }
+      }
+
+      if (metadataEngine == 'ORIENTDB') {
+        return exportOrientDb()
+      }
+      if (metadataEngine.startsWith('DATASTORE')) {
+        return exportDatastore()
+      }
+      try {
+        return exportDatastore()
+      } catch (Throwable ignored) {
+        return exportOrientDb()
+      }
+      """;
+  private static final String SOURCE_PROFILE_PROBE_SCRIPT = """
+      import groovy.json.JsonOutput
+
+      def out = [
+        metadataEngine: 'unknown',
+        datastore: [:],
+        repositorySchema: [:],
+        warnings: []
+      ]
+      try {
+        def applicationStatus = null
+        try {
+          applicationStatus = container.lookup('org.sonatype.nexus.common.app.ApplicationStatusSource')
+        } catch (Throwable ignoredAgain) {
+          applicationStatus = null
+        }
+        def status = applicationStatus == null ? null : applicationStatus.getSystemStatus()
+        if (status != null) {
+          out.nexusVersion = status.version == null ? null : String.valueOf(status.version)
+        }
+      } catch (Throwable ignored) {
+        // Nexus also exposes the version in the Server header, so ApplicationStatusSource failures
+        // are not actionable migration warnings.
+      }
+      def inspectConnection = { connection, evidence ->
+        def meta = connection.getMetaData()
+        def product = meta.getDatabaseProductName()
+        def url = meta.getURL()
+        out.datastore = [
+          jdbcProduct: product,
+          jdbcUrl: url,
+          databaseMajorVersion: meta.getDatabaseMajorVersion(),
+          databaseMinorVersion: meta.getDatabaseMinorVersion(),
+          evidence: evidence
+        ]
+        def productLower = product == null ? '' : String.valueOf(product).toLowerCase()
+        def urlLower = url == null ? '' : String.valueOf(url).toLowerCase()
+        if (productLower.contains('h2') || urlLower.contains('jdbc:h2')) {
+          out.metadataEngine = 'DATASTORE_H2'
+        } else if (productLower.contains('postgres') || urlLower.contains('postgres')) {
+          out.metadataEngine = 'DATASTORE_POSTGRESQL'
+        } else {
+          out.metadataEngine = 'DATASTORE_UNKNOWN'
+        }
+        def allTables = []
+        def all = meta.getTables(null, null, null, null)
+        try {
+          while (all.next()) {
+            def name = all.getString('TABLE_NAME')
+            if (name != null) {
+              allTables << name
+            }
+          }
+        } finally {
+          all.close()
+        }
+        def tables = []
+        def rs = meta.getTables(null, null, 'repository', null)
+        try {
+          while (rs.next()) {
+            tables << rs.getString('TABLE_NAME')
+          }
+        } finally {
+          rs.close()
+        }
+        def columns = []
+        def crs = meta.getColumns(null, null, 'repository', null)
+        try {
+          while (crs.next()) {
+            columns << crs.getString('COLUMN_NAME')
+          }
+        } finally {
+          crs.close()
+        }
+        def requiredContentColumns = [
+          content_repository: ['REPOSITORY_ID', 'CONFIG_REPOSITORY_ID'],
+          asset: ['ASSET_ID', 'REPOSITORY_ID', 'PATH', 'COMPONENT_ID', 'ASSET_BLOB_ID', 'LAST_DOWNLOADED', 'ATTRIBUTES', 'CREATED', 'LAST_UPDATED'],
+          asset_blob: ['ASSET_BLOB_ID', 'BLOB_REF', 'BLOB_SIZE', 'CONTENT_TYPE', 'CHECKSUMS', 'BLOB_CREATED', 'CREATED_BY', 'CREATED_BY_IP', 'ADDED_TO_REPOSITORY'],
+          component: ['COMPONENT_ID', 'REPOSITORY_ID', 'NAMESPACE', 'NAME', 'KIND', 'VERSION', 'ATTRIBUTES', 'CREATED', 'LAST_UPDATED']
+        ]
+        def datastoreFormats = [
+          maven2: 'MAVEN2',
+          npm: 'NPM',
+          pypi: 'PYPI',
+          go: 'GO',
+          helm: 'HELM',
+          docker: 'DOCKER',
+          nuget: 'NUGET',
+          rubygems: 'RUBYGEMS',
+          yum: 'YUM',
+          raw: 'RAW',
+          cargo: 'CARGO'
+        ]
+        def upperTables = allTables.collect { String.valueOf(it).toUpperCase() } as Set
+        def contentModels = [:]
+        datastoreFormats.each { format, prefix ->
+          def tableNames = [
+            contentRepository: prefix + '_CONTENT_REPOSITORY',
+            asset: prefix + '_ASSET',
+            assetBlob: prefix + '_ASSET_BLOB',
+            component: prefix + '_COMPONENT'
+          ]
+          def tablesPresent = tableNames.values().every { upperTables.contains(it) }
+          def columnsByTable = [:]
+          def requiredColumnsPresent = tablesPresent
+          tableNames.each { logicalName, tableName ->
+            def foundColumns = []
+            def actualTableName = allTables.find { String.valueOf(it).equalsIgnoreCase(tableName) } ?: tableName
+            def columnResult = meta.getColumns(null, null, actualTableName, null)
+            try {
+              while (columnResult.next()) {
+                foundColumns << columnResult.getString('COLUMN_NAME')
+              }
+            } finally {
+              columnResult.close()
+            }
+            columnsByTable[logicalName] = foundColumns
+            def upperColumns = foundColumns.collect { String.valueOf(it).toUpperCase() } as Set
+            def key = logicalName == 'contentRepository' ? 'content_repository'
+                : logicalName == 'assetBlob' ? 'asset_blob'
+                : logicalName
+            def required = requiredContentColumns[key] ?: []
+            requiredColumnsPresent = requiredColumnsPresent && required.every { upperColumns.contains(it) }
+          }
+          contentModels[format] = [
+            prefix: prefix,
+            tables: tableNames,
+            tablesPresent: tablesPresent,
+            requiredColumnsPresent: requiredColumnsPresent,
+            columns: columnsByTable
+          ]
+        }
+        out.repositorySchema = [
+          tables: tables,
+          columns: columns,
+          datastoreTables: allTables.sort(),
+          datastoreContentModels: contentModels
+        ]
+      }
+      try {
+        def datastoreManager = null
+        try {
+          datastoreManager = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')
+        } catch (Throwable ignored) {
+          datastoreManager = null
+        }
+        if (datastoreManager != null) {
+          def datastore = null
+          try {
+            def selected = datastoreManager.get('nexus')
+            datastore = selected == null ? null : selected.orElse(null)
+          } catch (Throwable ignored) {
+            datastore = null
+          }
+          if (datastore == null) {
+            def stores = datastoreManager.browse()
+            def iterator = stores == null ? null : stores.iterator()
+            datastore = iterator != null && iterator.hasNext() ? iterator.next() : null
+          }
+          if (datastore != null) {
+            def connection = datastore.openConnection()
+            try {
+              inspectConnection(connection, 'DataStoreManager')
+            } finally {
+              connection.close()
+            }
+          }
+        }
+        def dataSource = null
+        if (out.metadataEngine == 'unknown') {
+          try {
+            dataSource = container.lookup(javax.sql.DataSource.class, 'nexus')
+          } catch (Throwable ignored) {
+            try {
+              dataSource = container.lookup(javax.sql.DataSource.class)
+            } catch (Throwable ignoredAgain) {
+              dataSource = null
+            }
+          }
+        }
+        if (out.metadataEngine == 'unknown' && dataSource != null) {
+          def connection = dataSource.getConnection()
+          try {
+            inspectConnection(connection, 'DataSource')
+          } finally {
+            connection.close()
+          }
+        }
+      } catch (Throwable e) {
+        out.warnings << 'datastore probe failed: ' + e.class.name + ': ' + String.valueOf(e.message)
+      }
+      if (out.metadataEngine == 'unknown') {
+        try {
+          container.lookup('org.sonatype.nexus.orient.DatabaseInstance')
+          out.metadataEngine = 'ORIENTDB'
+        } catch (Throwable ignored) {
+          try {
+            container.lookup('org.sonatype.nexus.orient.DatabaseInstance', 'component')
+            out.metadataEngine = 'ORIENTDB'
+          } catch (Throwable ignoredAgain) {
+            out.warnings << 'metadata engine could not be identified'
+          }
+        }
+      }
+      return JsonOutput.toJson(out)
       """;
 
   private final List<URI> baseUris;
@@ -316,11 +949,12 @@ public class NexusRestClient {
         .build();
     return request -> {
       HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-      return new HttpTextResponse(response.statusCode(), response.body());
+      return new HttpTextResponse(response.statusCode(), response.body(), response.headers().map());
     };
   }
 
   public NexusInventory readInventory() throws IOException, InterruptedException {
+    SourceProbe probe = probeSource();
     List<Map<String, Object>> repositories = getList("/service/rest/v1/repositories");
     List<RepositoryDocument> repositoryDocuments = new ArrayList<>(repositories.size());
     for (Map<String, Object> repository : repositories) {
@@ -338,15 +972,133 @@ public class NexusRestClient {
       }
       repositoryDocuments.add(new RepositoryDocument(repository, detail));
     }
-    SecurityExportResult security = readSecurityExport();
+    SecurityExportResult security = readSecurityExport(probe);
     return new NexusInventory(
         getList("/service/rest/v1/blobstores"),
         repositoryDocuments,
         security.export(),
-        security.warnings());
+        mergeWarnings(security.warnings(), probe == null ? List.of() : probe.warnings()),
+        probe);
+  }
+
+  private SourceProbe probeSource() throws IOException, InterruptedException {
+    String statusVersion = null;
+    List<String> warnings = new ArrayList<>();
+    try {
+      HttpTextResponse statusResponse = getResponse("/service/rest/v1/status");
+      Map<String, Object> status = parseOptionalMap(statusResponse.body());
+      statusVersion = firstNonBlank(firstString(status, "version"), nexusServerVersion(statusResponse));
+    } catch (IOException e) {
+      warnings.add("Source Nexus REST status probe failed: " + e.getMessage());
+    }
+
+    String scriptName = "kkrepo-source-profile-" + UUID.randomUUID().toString().replace("-", "");
+    Map<String, Object> createRequest = Map.of(
+        "name", scriptName,
+        "type", "groovy",
+        "content", SOURCE_PROFILE_PROBE_SCRIPT);
+    HttpTextResponse created;
+    try {
+      created = postJson("/service/rest/v1/script", createRequest);
+    } catch (IOException e) {
+      warnings.add("Source Nexus script API source profile probe failed before creation: " + e.getMessage());
+      return new SourceProbe(
+          statusVersion,
+          false,
+          false,
+          false,
+          "text/plain",
+          "create_failed",
+          "UNKNOWN",
+          null,
+          null,
+          Map.of(),
+          warnings);
+    }
+    if (!created.success()) {
+      warnings.add("Source Nexus script API did not create source profile probe: " + created.describe());
+      return new SourceProbe(
+          statusVersion,
+          false,
+          false,
+          false,
+          "text/plain",
+          "create_failed",
+          "UNKNOWN",
+          null,
+          null,
+          Map.of(),
+          warnings);
+    }
+    try {
+      HttpTextResponse run = postText("/service/rest/v1/script/"
+          + encodePathSegment(scriptName)
+          + "/run", "");
+      if (!run.success()) {
+        warnings.add("Source Nexus script API did not run source profile probe: " + run.describe());
+        return new SourceProbe(
+            statusVersion,
+            true,
+            false,
+            false,
+            "text/plain",
+            "run_failed",
+            "UNKNOWN",
+            null,
+            null,
+            Map.of(),
+            warnings);
+      }
+      Map<String, Object> document = objectMapper.readValue(run.body(), MAP);
+      String result = string(document.get("result"));
+      if (result == null) {
+        warnings.add("Source Nexus script API returned an empty source profile probe result.");
+        return new SourceProbe(
+            statusVersion,
+            true,
+            true,
+            false,
+            "text/plain",
+            "empty_result",
+            "UNKNOWN",
+            null,
+            null,
+            Map.of(),
+            warnings);
+      }
+      Map<String, Object> profile = objectMapper.readValue(result, MAP);
+      warnings.addAll(stringList(profile.get("warnings")));
+      Map<String, Object> datastore = objectValue(profile.get("datastore"));
+      return new SourceProbe(
+          firstNonBlank(firstString(profile, "nexusVersion"), statusVersion),
+          true,
+          true,
+          true,
+          "text/plain",
+          "ok",
+          firstNonBlank(firstString(profile, "metadataEngine"), "UNKNOWN"),
+          firstString(datastore, "jdbcProduct"),
+          firstString(datastore, "jdbcUrl"),
+          objectValue(profile.get("repositorySchema")),
+          warnings);
+    } finally {
+      try {
+        delete("/service/rest/v1/script/" + encodePathSegment(scriptName));
+      } catch (IOException e) {
+        warnings.add("Source Nexus script API did not delete source profile probe: " + e.getMessage());
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        warnings.add("Source Nexus script API source profile probe cleanup was interrupted.");
+      }
+    }
   }
 
   public RepositoryDataScriptSession openRepositoryDataScript()
+      throws IOException, InterruptedException {
+    return openRepositoryDataScript(null);
+  }
+
+  public RepositoryDataScriptSession openRepositoryDataScript(SourceProbe probe)
       throws IOException, InterruptedException {
     String scriptName = "kkrepo-repository-data-export-" + UUID.randomUUID().toString().replace("-", "");
     Map<String, Object> createRequest = Map.of(
@@ -358,7 +1110,7 @@ public class NexusRestClient {
       throw new IOException("Source Nexus script API did not create repository data export script: "
           + created.describe());
     }
-    return new RepositoryDataScriptSession(scriptName);
+    return new RepositoryDataScriptSession(scriptName, probe);
   }
 
   public HttpResponse<InputStream> getRepositoryAsset(String repositoryName, String path)
@@ -413,11 +1165,11 @@ public class NexusRestClient {
     return "*/*";
   }
 
-  private SecurityExportResult readSecurityExport() throws IOException, InterruptedException {
+  private SecurityExportResult readSecurityExport(SourceProbe probe) throws IOException, InterruptedException {
     List<Map<String, Object>> users = getList(LOCAL_USERS_PATH).stream()
         .filter(NexusRestClient::isLocalUser)
         .toList();
-    SecurityScriptProbe securityScriptProbe = readLocalSecurityScriptExport();
+    SecurityScriptProbe securityScriptProbe = readLocalSecurityScriptExport(probe);
     List<Map<String, Object>> mergedUsers = mergePasswordHashes(users, securityScriptProbe.passwordHashes());
     List<Map<String, Object>> userRoleMappings = users.stream()
         .map(user -> {
@@ -453,7 +1205,7 @@ public class NexusRestClient {
     return source == null || LOCAL_USER_SOURCE.equalsIgnoreCase(source);
   }
 
-  private SecurityScriptProbe readLocalSecurityScriptExport() throws IOException, InterruptedException {
+  private SecurityScriptProbe readLocalSecurityScriptExport(SourceProbe probe) throws IOException, InterruptedException {
     String scriptName = "kkrepo-security-export-" + UUID.randomUUID().toString().replace("-", "");
     Map<String, Object> createRequest = Map.of(
         "name", scriptName,
@@ -467,7 +1219,8 @@ public class NexusRestClient {
     try {
       HttpTextResponse run = postText("/service/rest/v1/script/"
           + encodePathSegment(scriptName)
-          + "/run", "");
+          + "/run", objectMapper.writeValueAsString(Map.of(
+              "metadataEngine", firstNonBlank(probe == null ? null : probe.metadataEngine(), "UNKNOWN"))));
       if (!run.success()) {
         return SecurityScriptProbe.warning("Source Nexus script API did not return local user password hashes or API keys: "
             + run.describe());
@@ -536,11 +1289,27 @@ public class NexusRestClient {
     return objectMapper.readValue(get(path), MAP);
   }
 
+  private Map<String, Object> getOptionalMap(String path) throws IOException, InterruptedException {
+    String body = getResponse(path).body();
+    return parseOptionalMap(body);
+  }
+
+  private Map<String, Object> parseOptionalMap(String body) throws IOException {
+    if (body == null || body.isBlank()) {
+      return Map.of();
+    }
+    return objectMapper.readValue(body, MAP);
+  }
+
   private List<String> getStringList(String path) throws IOException, InterruptedException {
     return objectMapper.readValue(get(path), LIST_OF_STRINGS);
   }
 
   private String get(String path) throws IOException, InterruptedException {
+    return getResponse(path).body();
+  }
+
+  private HttpTextResponse getResponse(String path) throws IOException, InterruptedException {
     HttpTextResponse response = send(path, baseUri -> requestBuilder(baseUri, path)
         .GET()
         .build());
@@ -548,7 +1317,7 @@ public class NexusRestClient {
       throw new IOException("Nexus API " + path + " returned HTTP " + response.statusCode()
           + ": " + truncate(response.body()));
     }
-    return response.body();
+    return response;
   }
 
   private HttpTextResponse postJson(String path, Object body) throws IOException, InterruptedException {
@@ -762,10 +1531,23 @@ public class NexusRestClient {
   }
 
   private static String firstString(Map<String, Object> map, String... keys) {
+    if (map == null) {
+      return null;
+    }
     for (String key : keys) {
       String value = string(map.get(key));
       if (value != null) {
         return value;
+      }
+    }
+    return null;
+  }
+
+  private static String firstNonBlank(String... values) {
+    for (String value : values) {
+      String normalized = string(value);
+      if (normalized != null) {
+        return normalized;
       }
     }
     return null;
@@ -842,6 +1624,31 @@ public class NexusRestClient {
     return lower;
   }
 
+  private static String nexusServerVersion(HttpTextResponse response) {
+    if (response == null || response.headers() == null) {
+      return null;
+    }
+    String server = response.headers().entrySet().stream()
+        .filter(entry -> "server".equalsIgnoreCase(entry.getKey()))
+        .flatMap(entry -> entry.getValue().stream())
+        .findFirst()
+        .orElse(null);
+    if (server == null) {
+      return null;
+    }
+    String prefix = "Nexus/";
+    int start = server.indexOf(prefix);
+    if (start < 0) {
+      return null;
+    }
+    start += prefix.length();
+    int end = start;
+    while (end < server.length() && !Character.isWhitespace(server.charAt(end))) {
+      end++;
+    }
+    return start < end ? server.substring(start, end) : null;
+  }
+
   private static String truncate(String body) {
     if (body == null) {
       return "";
@@ -853,21 +1660,33 @@ public class NexusRestClient {
       List<Map<String, Object>> blobStores,
       List<RepositoryDocument> repositories,
       NexusSecurityExport securityExport,
-      List<String> warnings) {
+      List<String> warnings,
+      SourceProbe probe) {
 
     public NexusInventory {
       blobStores = blobStores == null ? List.of() : List.copyOf(blobStores);
       repositories = repositories == null ? List.of() : List.copyOf(repositories);
+      securityExport = securityExport == null ? NexusSecurityExport.empty() : securityExport;
       warnings = warnings == null ? List.of() : List.copyOf(warnings);
+    }
+
+    public NexusInventory(
+        List<Map<String, Object>> blobStores,
+        List<RepositoryDocument> repositories,
+        NexusSecurityExport securityExport,
+        List<String> warnings) {
+      this(blobStores, repositories, securityExport, warnings, null);
     }
   }
 
   public final class RepositoryDataScriptSession implements AutoCloseable {
     private final String scriptName;
+    private final SourceProbe probe;
     private boolean closed;
 
-    private RepositoryDataScriptSession(String scriptName) {
+    private RepositoryDataScriptSession(String scriptName, SourceProbe probe) {
       this.scriptName = scriptName;
+      this.probe = probe;
     }
 
     public RepositoryAssetPage readPage(String repositoryName, String afterPath, int pageSize)
@@ -877,11 +1696,30 @@ public class NexusRestClient {
 
     public RepositoryAssetPage readPage(String repositoryName, String afterPath, int pageSize, Instant since)
         throws IOException, InterruptedException {
+      return readPage(
+          repositoryName,
+          repositoryFormat(repositoryName),
+          firstNonBlank(probe == null ? null : probe.metadataEngine(), "UNKNOWN"),
+          afterPath,
+          pageSize,
+          since);
+    }
+
+    public RepositoryAssetPage readPage(
+        String repositoryName,
+        String repositoryFormat,
+        String metadataEngine,
+        String afterPath,
+        int pageSize,
+        Instant since)
+        throws IOException, InterruptedException {
       if (closed) {
         throw new IllegalStateException("repository data export script session is closed");
       }
       Map<String, Object> request = new LinkedHashMap<>();
       request.put("repositoryName", repositoryName);
+      request.put("repositoryFormat", firstNonBlank(repositoryFormat, ""));
+      request.put("metadataEngine", firstNonBlank(metadataEngine, "UNKNOWN"));
       request.put("afterPath", afterPath);
       request.put("pageSize", pageSize);
       if (since != null) {
@@ -916,6 +1754,22 @@ public class NexusRestClient {
         throw new IOException("Interrupted while deleting Nexus repository data export script", e);
       }
     }
+  }
+
+  private String repositoryFormat(String repositoryName) {
+    if (repositoryName == null || repositoryName.isBlank()) {
+      return "";
+    }
+    try {
+      List<Map<String, Object>> repositories = getList("/service/rest/v1/repositories");
+      for (Map<String, Object> repository : repositories) {
+        if (repositoryName.equals(firstString(repository, "name"))) {
+          return firstNonBlank(firstString(repository, "format"), "");
+        }
+      }
+    } catch (Exception ignored) {
+    }
+    return "";
   }
 
   private RepositoryAssetPage repositoryAssetPageFromScriptResult(String result) throws IOException {
@@ -1053,7 +1907,16 @@ public class NexusRestClient {
 
   record HttpTextResponse(
       int statusCode,
-      String body) {
+      String body,
+      Map<String, List<String>> headers) {
+
+    HttpTextResponse(int statusCode, String body) {
+      this(statusCode, body, Map.of());
+    }
+
+    public HttpTextResponse {
+      headers = headers == null ? Map.of() : Map.copyOf(headers);
+    }
 
     private boolean success() {
       return statusCode >= 200 && statusCode < 300;
@@ -1082,6 +1945,36 @@ public class NexusRestClient {
       summary = safeMap(summary);
       detail = safeMap(detail);
     }
+  }
+
+  public record SourceProbe(
+      String nexusVersion,
+      boolean scriptApiCreatable,
+      boolean scriptApiRunnable,
+      boolean scriptApiDeleted,
+      String scriptRunContentType,
+      String scriptApiStatus,
+      String metadataEngine,
+      String jdbcProduct,
+      String jdbcUrl,
+      Map<String, Object> repositorySchema,
+      List<String> warnings) {
+
+    public SourceProbe {
+      repositorySchema = safeMap(repositorySchema);
+      warnings = warnings == null ? List.of() : List.copyOf(warnings);
+    }
+  }
+
+  private static List<String> mergeWarnings(List<String> first, List<String> second) {
+    ArrayList<String> warnings = new ArrayList<>();
+    if (first != null) {
+      warnings.addAll(first);
+    }
+    if (second != null) {
+      warnings.addAll(second);
+    }
+    return List.copyOf(warnings.stream().filter(value -> value != null && !value.isBlank()).distinct().toList());
   }
 
   private static Map<String, Object> safeMap(Map<String, Object> source) {

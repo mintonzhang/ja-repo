@@ -128,6 +128,8 @@ class RepositoryDataMigrationWorker {
       do {
         RepositoryAssetPage page = script.readPage(
             repositoryJob.sourceRepositoryName(),
+            repositoryJob.format().id(),
+            source.metadataEngine(),
             cursor,
             repositoryJob.pageSize(),
             metadataSince);
@@ -153,6 +155,7 @@ class RepositoryDataMigrationWorker {
     List<RepositoryDataMigrationAssetRecord> records = page.assets().stream()
         .filter(asset -> changedSince(asset, metadataSince))
         .filter(asset -> RepositoryDataMigrationPaths.shouldDiscoverAsset(repositoryJob.format(), asset.path()))
+        .filter(asset -> shouldMigrateSourceAsset(repositoryJob.format(), asset.path()))
         .map(asset -> assetRecord(repositoryJob, asset))
         .toList();
     boolean complete = page.complete();
@@ -223,6 +226,15 @@ class RepositoryDataMigrationWorker {
 
   private void migrateOne(AssetClaim claim, NexusRestClient client, boolean checksumValidation) {
     try {
+      if (!shouldMigrateSourceAsset(claim.repositoryFormat(), claim.asset().sourcePath())) {
+        migrationDao.markAssetMigrated(
+            claim.asset().id(),
+            claim.asset().repositoryJobId(),
+            null,
+            null,
+            null);
+        return;
+      }
       HttpResponse<InputStream> response = client.getRepositoryAsset(
           claim.sourceRepositoryName(),
           claim.asset().sourcePath());
@@ -272,6 +284,24 @@ class RepositoryDataMigrationWorker {
     return true;
   }
 
+  static boolean shouldMigrateSourceAsset(RepositoryFormat format, String path) {
+    if (format == RepositoryFormat.CARGO && isCargoDynamicConfig(path)) {
+      return false;
+    }
+    return true;
+  }
+
+  private static boolean isCargoDynamicConfig(String path) {
+    if (path == null) {
+      return false;
+    }
+    String normalized = path.trim();
+    while (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    return "config.json".equals(normalized);
+  }
+
   private static boolean changedSince(RepositoryAssetMetadata asset, Instant since) {
     if (since == null) {
       return true;
@@ -307,7 +337,38 @@ class RepositoryDataMigrationWorker {
     boolean checksumValidation = bool(options.get("checksumValidation"), true);
     return new SourceAccess(
         new NexusRestClient(sourceBaseUrl, sourceUsername, sourcePassword, objectMapper),
+        metadataEngine(options),
         checksumValidation);
+  }
+
+  private static String metadataEngine(Map<String, Object> options) {
+    if (options == null) {
+      return "UNKNOWN";
+    }
+    Object sourceProfile = options.get("sourceProfile");
+    if (sourceProfile instanceof Map<?, ?> profile) {
+      Object engine = profile.get("metadataEngine");
+      if (engine != null && !String.valueOf(engine).isBlank()) {
+        return String.valueOf(engine);
+      }
+    }
+    Object migrationPlan = options.get("migrationPlan");
+    if (migrationPlan instanceof Map<?, ?> plan) {
+      Object adapter = plan.get("adapter");
+      if (adapter != null) {
+        String value = String.valueOf(adapter);
+        if (value.contains("OrientDb")) {
+          return "ORIENTDB";
+        }
+        if (value.contains("DatastoreH2")) {
+          return "DATASTORE_H2";
+        }
+        if (value.contains("DatastorePostgresql")) {
+          return "DATASTORE_POSTGRESQL";
+        }
+      }
+    }
+    return "UNKNOWN";
   }
 
   private static RepositoryDataMigrationAssetRecord assetRecord(
@@ -479,7 +540,7 @@ class RepositoryDataMigrationWorker {
     return error.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
   }
 
-  private record SourceAccess(NexusRestClient client, boolean checksumValidation) {
+  private record SourceAccess(NexusRestClient client, String metadataEngine, boolean checksumValidation) {
   }
 
   record BatchProgressTargets(List<Long> repositoryJobIds, List<Long> jobIds) {
