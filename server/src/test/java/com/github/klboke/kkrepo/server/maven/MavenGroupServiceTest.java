@@ -105,6 +105,27 @@ class MavenGroupServiceTest {
   }
 
   @Test
+  void cachedGroupArtifactExpiresUsingShortestMemberContentMaxAge() throws IOException {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    AssetMetadataCache cache = new AssetMetadataCache(shared, true, 120, 5);
+    MavenPath path = markerJar();
+    warmCache(cache, 1L, path.path(),
+        snapshot(100L, 1L, path.path(), blob(900L), Instant.now().minusSeconds(120)));
+    MavenGroupService service = new MavenGroupService(
+        new MissingHostedService(),
+        new SuccessfulProxyService(),
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(new BytesBlobStorage("cached-group")),
+        null,
+        cache);
+
+    MavenResponse response = service.get(group(1L, "maven-public", List.of(proxy(1, 1440))), path, false);
+
+    assertEquals(200, response.status());
+    assertEquals("module-ok", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+  }
+
+  @Test
   void memberHitWritesGroupArtifactReferenceCache() {
     InMemorySharedCache shared = new InMemorySharedCache();
     AssetMetadataCache cache = new AssetMetadataCache(shared, true, 120, 5);
@@ -207,6 +228,10 @@ class MavenGroupServiceTest {
   }
 
   private static RepositoryRuntime proxy() {
+    return proxy(1440, 1440);
+  }
+
+  private static RepositoryRuntime proxy(int contentMaxAgeMinutes, int metadataMaxAgeMinutes) {
     return new RepositoryRuntime(
         3,
         "nexus-dev",
@@ -220,12 +245,21 @@ class MavenGroupServiceTest {
         "PERMISSIVE",
         true,
         "http://127.0.0.1:8080/repository/maven-public/",
-        1440,
-        1440,
+        contentMaxAgeMinutes,
+        metadataMaxAgeMinutes,
         true, null, List.of());
   }
 
   private static CachedAssetMetadata snapshot(long assetId, long repositoryId, String path, AssetBlobRecord blob) {
+    return snapshot(assetId, repositoryId, path, blob, Instant.now().minusSeconds(60));
+  }
+
+  private static CachedAssetMetadata snapshot(
+      long assetId,
+      long repositoryId,
+      String path,
+      AssetBlobRecord blob,
+      Instant lastUpdatedAt) {
     return CachedAssetMetadata.of(new AssetRecord(
         assetId,
         repositoryId,
@@ -239,7 +273,7 @@ class MavenGroupServiceTest {
         "application/java-archive",
         blob.size(),
         null,
-        Instant.now().minusSeconds(60),
+        lastUpdatedAt,
         Map.of()),
         blob);
   }

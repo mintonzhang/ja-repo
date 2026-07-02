@@ -104,7 +104,7 @@ public class NpmGroupPackumentCache {
         group.id(),
         NexusCacheType.METADATA,
         cacheInfo,
-        group.metadataMaxAgeMinutesOrDefault(),
+        group.effectiveMetadataMaxAgeMinutesOrDefault(),
         now)) {
       return Optional.empty();
     }

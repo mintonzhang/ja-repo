@@ -2,7 +2,9 @@ package com.github.klboke.kkrepo.server.maven;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Immutable per-request snapshot of a repository's configuration relevant to serving Maven
@@ -239,6 +241,51 @@ public record RepositoryRuntime(
 
   public int metadataMaxAgeMinutesOrDefault() {
     return metadataMaxAgeMinutes == null ? 1440 : metadataMaxAgeMinutes;
+  }
+
+  public int effectiveContentMaxAgeMinutesOrDefault() {
+    return effectiveMaxAgeMinutes(false, new HashSet<>());
+  }
+
+  public int effectiveMetadataMaxAgeMinutesOrDefault() {
+    return effectiveMaxAgeMinutes(true, new HashSet<>());
+  }
+
+  private int effectiveMaxAgeMinutes(boolean metadata, Set<Long> resolvingGroups) {
+    boolean addedGroup = false;
+    if (isGroup()) {
+      if (!resolvingGroups.add(id)) {
+        return -1;
+      }
+      addedGroup = true;
+    }
+    try {
+      int effective = metadata ? metadataMaxAgeMinutesOrDefault() : contentMaxAgeMinutesOrDefault();
+      if (isGroup() && members != null) {
+        for (RepositoryRuntime member : members) {
+          if (member != null) {
+            effective = shortestFiniteMaxAge(
+                effective,
+                member.effectiveMaxAgeMinutes(metadata, resolvingGroups));
+          }
+        }
+      }
+      return effective;
+    } finally {
+      if (addedGroup) {
+        resolvingGroups.remove(id);
+      }
+    }
+  }
+
+  private static int shortestFiniteMaxAge(int left, int right) {
+    if (left < 0) {
+      return right;
+    }
+    if (right < 0) {
+      return left;
+    }
+    return Math.min(left, right);
   }
 
   public boolean autoBlockOrDefault() {
