@@ -65,6 +65,20 @@ class PypiGroupSimpleIndexCacheTest {
   }
 
   @Test
+  void memberMetadataMaxAgeExpiresGroupIndexAsset() {
+    Fixture fixture = fixture(true);
+    RepositoryRuntime proxy = proxyRuntime(10L, "pypi-proxy", 1);
+    RepositoryRuntime group = runtime(99L, "pypi-group", 1440, List.of(proxy));
+    fixture.assets.putAsset(group.id(), PypiPaths.indexPath("demo"),
+        PypiGroupSimpleIndexCache.INDEX, fixture.cache.freshAttributes(group, "demo", NOW), NOW);
+
+    assertTrue(fixture.cache.findFresh(
+        group, PypiPaths.indexPath("demo"), PypiGroupSimpleIndexCache.INDEX, NOW.plusSeconds(59)).isPresent());
+    assertTrue(fixture.cache.findFresh(
+        group, PypiPaths.indexPath("demo"), PypiGroupSimpleIndexCache.INDEX, NOW.plusSeconds(60)).isEmpty());
+  }
+
+  @Test
   void memberProjectInvalidationMarksRootAndProjectIndexesAndAncestorsInvalidated() {
     Fixture fixture = fixture(true);
     RepositoryRuntime inner = runtime(20L, "inner", 60);
@@ -148,10 +162,25 @@ class PypiGroupSimpleIndexCacheTest {
   }
 
   private static RepositoryRuntime runtime(long id, String name, int metadataMaxAgeMinutes) {
+    return runtime(id, name, metadataMaxAgeMinutes, List.of());
+  }
+
+  private static RepositoryRuntime runtime(
+      long id,
+      String name,
+      int metadataMaxAgeMinutes,
+      List<RepositoryRuntime> members) {
     return new RepositoryRuntime(
         id, name, RepositoryFormat.PYPI, RepositoryType.GROUP, "pypi-group",
         true, 1L, "ALLOW", null, null, true, null, null, metadataMaxAgeMinutes,
-        null, null, List.of());
+        null, null, members);
+  }
+
+  private static RepositoryRuntime proxyRuntime(long id, String name, int metadataMaxAgeMinutes) {
+    return new RepositoryRuntime(
+        id, name, RepositoryFormat.PYPI, RepositoryType.PROXY, "pypi-proxy",
+        true, 1L, "ALLOW", null, null, true, "http://example.invalid/simple/", null,
+        metadataMaxAgeMinutes, null, null, List.of());
   }
 
   private static RepositoryRecord record(long id, String name) {

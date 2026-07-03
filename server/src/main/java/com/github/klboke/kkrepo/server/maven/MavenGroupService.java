@@ -137,7 +137,7 @@ public class MavenGroupService {
       MavenPath path,
       CachedAssetMetadata snapshot,
       Instant now) {
-    int ttl = group.contentMaxAgeMinutesOrDefault();
+    int ttl = group.effectiveContentMaxAgeMinutesOrDefault();
     Optional<NexusLikeCacheInfo> cacheInfo = NexusLikeCacheInfo.fromAttributes(snapshot.attributes());
     if (cacheController != null && cacheInfo.isPresent()) {
       return !cacheController.isStale(group.id(), NexusCacheType.CONTENT, cacheInfo.get(), ttl, now);
@@ -181,14 +181,13 @@ public class MavenGroupService {
   private MavenResponse serveMergedMetadata(
       RepositoryRuntime group, MavenPath path, boolean headOnly, DispatchedRepositories dispatched) {
     Instant now = Instant.now();
-    int ttl = group.metadataMaxAgeMinutesOrDefault();
+    int ttl = group.effectiveMetadataMaxAgeMinutesOrDefault();
     Optional<CachedAssetMetadata> cached = assetMetadataCache.find(
         group.id(),
         path.path(),
         () -> AssetMetadataCache.Loaded.from(
             assetDao.findAssetByPath(group.id(), path.path()), assetDao));
-    if (cached.isPresent() && ttl >= 0 && cached.get().lastUpdatedAt() != null
-        && cached.get().lastUpdatedAt().plusSeconds(ttl * 60L).isAfter(now)) {
+    if (cached.isPresent() && isGroupMetadataFresh(group, cached.get(), ttl, now)) {
       return serveCached(cached.get(), headOnly, path);
     }
     List<byte[]> members = collectMemberMetadata(group, path, dispatched);
@@ -216,6 +215,24 @@ public class MavenGroupService {
             BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
             .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.path())),
         blob.size(), asset.contentType(), blob.sha1(), asset.lastUpdatedAt());
+  }
+
+  private boolean isGroupMetadataFresh(
+      RepositoryRuntime group,
+      CachedAssetMetadata snapshot,
+      int ttl,
+      Instant now) {
+    Optional<NexusLikeCacheInfo> cacheInfo = NexusLikeCacheInfo.fromAttributes(snapshot.attributes());
+    if (cacheController != null && cacheInfo.isPresent()) {
+      return !cacheController.isStale(group.id(), NexusCacheType.METADATA, cacheInfo.get(), ttl, now);
+    }
+    if (snapshot.lastUpdatedAt() == null) {
+      return false;
+    }
+    if (ttl < 0) {
+      return true;
+    }
+    return snapshot.lastUpdatedAt().plusSeconds(ttl * 60L).isAfter(now);
   }
 
   private List<byte[]> collectMemberMetadata(
