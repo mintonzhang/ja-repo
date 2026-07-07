@@ -151,7 +151,7 @@ spring:
   application:
     name: kkrepo
   profiles:
-    active: prod
+    active: dev
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
