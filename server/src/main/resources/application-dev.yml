@@ -2,12 +2,6 @@ kkrepo:
   security:
     outbound:
       allow-private-addresses: true
-  ui:
-    product-name: ${KKREPO_UI_PRODUCT_NAME:jasolar-repo}
-    product-subtitle: ${KKREPO_UI_PRODUCT_SUBTITLE:晶澳制品仓库}
-    logo-text: ${KKREPO_UI_LOGO_TEXT:JR}
-    logo-url: ${KKREPO_UI_LOGO_URL:}
-    favicon-url: ${KKREPO_UI_FAVICON_URL:}
 logging:
   level:
     com.github.klboke.kkrepo: DEBUG
