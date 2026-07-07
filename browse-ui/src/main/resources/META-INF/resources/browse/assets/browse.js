@@ -103,6 +103,53 @@ async function applyBranding() {
   } catch { /* ignore */ }
 }
 
+const BANNER_ICONS = { info: "ⓘ", success: "ⓘ", warning: "ⓘ", danger: "ⓘ" };
+const BANNER_STORAGE_KEY = "kkrepo-banner-dismissed";
+
+function renderBanner() {
+  const settings = window.kkrepoI18n?.settings?.();
+  const region = document.getElementById("banner-region");
+  const textEl = document.getElementById("banner-text");
+  const iconEl = document.getElementById("banner-icon");
+  const closeBtn = document.getElementById("banner-close");
+  if (!region || !settings) return;
+  if (!settings.bannerEnabled || !settings.bannerMessage) {
+    region.hidden = true;
+    document.body.style.paddingTop = "";
+    return;
+  }
+  const dismissedKey = `${BANNER_STORAGE_KEY}:${settings.bannerMessage}`;
+  if (sessionStorage.getItem(dismissedKey)) {
+    region.hidden = true;
+    document.body.style.paddingTop = "";
+    return;
+  }
+  region.hidden = false;
+  region.className = `banner-region banner-${settings.bannerLevel || "info"}`;
+  if (textEl) textEl.textContent = settings.bannerMessage;
+  if (iconEl) iconEl.textContent = BANNER_ICONS[settings.bannerLevel] || "ⓘ";
+  if (closeBtn) closeBtn.hidden = !settings.bannerDismissible;
+  // Add padding to body to prevent banner from covering content
+  const bannerHeight = region.offsetHeight || 40;
+  document.body.style.paddingTop = `${bannerHeight}px`;
+}
+
+function initBannerClose() {
+  const closeBtn = document.getElementById("banner-close");
+  if (!closeBtn) return;
+  closeBtn.addEventListener("click", () => {
+    const settings = window.kkrepoI18n?.settings?.();
+    if (settings?.bannerMessage) {
+      sessionStorage.setItem(`${BANNER_STORAGE_KEY}:${settings.bannerMessage}`, "1");
+    }
+    const region = document.getElementById("banner-region");
+    if (region) {
+      region.hidden = true;
+      document.body.style.paddingTop = "";
+    }
+  });
+}
+
 function sameOrigin(input) {
   const url = typeof input === "string" ? input : input.url;
   return new URL(url, window.location.origin).origin === window.location.origin;
@@ -2629,6 +2676,11 @@ function applyHashRoute() {
 
 async function bootstrap() {
   applyBranding();
+  initBannerClose();
+  window.kkrepoI18n?.ready().then(() => {
+    renderBanner();
+    window.addEventListener("kkrepo:i18n-change", renderBanner);
+  });
   try {
     adminBootstrapStatus = await fetchAdminBootstrapStatus();
   } catch (e) {

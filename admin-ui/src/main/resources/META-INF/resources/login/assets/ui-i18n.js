@@ -273,13 +273,28 @@
     "Refresh jobs": "刷新任务",
     "System": "系统",
     "UI Settings": "界面设置",
-    "Configure the default UI language shared by all replicas": "配置所有副本共享的默认界面语言",
+    "Configure the default UI language, banner messages, and branding shared by all replicas": "配置所有副本共享的默认界面语言、横幅消息和品牌标识",
     "Default language": "默认语言",
     "Follow browser": "跟随浏览器",
     "Chinese": "中文",
     "English": "英文",
     "Save UI settings": "保存界面设置",
     "This preference is stored in MySQL and applies to the administration, browse, and sign-in UI on every replica.": "此设置存储在 MySQL 中，对所有副本的管理、浏览和登录界面均生效。",
+    "Banner Message": "横幅消息",
+    "Enable banner": "启用横幅",
+    "Message type": "消息类型",
+    "Message content": "消息内容",
+    "Enter banner message text...": "输入横幅消息内容...",
+    "Dismissible": "可关闭",
+    "Banner message displayed at the top of all pages. Level controls the visual style (info=blue, success=green, warning=orange, danger=red).": "横幅消息显示在所有页面顶部。级别控制视觉样式（info=蓝色，success=绿色，warning=橙色，danger=红色）。",
+    "Branding": "品牌标识",
+    "Product name": "产品名称",
+    "Product subtitle": "产品副标题",
+    "Logo text": "Logo 文字",
+    "Logo URL": "Logo 图片 URL",
+    "Favicon URL": "收藏夹图标 URL",
+    "Branding settings override the defaults from configuration files. Leave fields blank to use defaults.": "品牌标识设置将覆盖配置文件中的默认值。留空则使用默认值。",
+    "UI settings saved.": "界面设置已保存。",
     "Welcome": "欢迎",
     "Nexus-compatible repository access for internal packages": "面向内部包的 Nexus 兼容仓库访问",
     "Initial administrator setup": "初始管理员设置",
@@ -394,6 +409,7 @@
     "Docker operations request failed.": "Docker 操作请求失败。",
     "Docker operations request failed": "Docker 操作请求失败",
     "UI language settings saved.": "界面语言设置已保存。",
+    "UI settings saved.": "界面设置已保存。",
     "Session check failed": "Session 检查失败",
     "Save failed": "保存失败",
     "Create failed": "创建失败",
@@ -538,6 +554,18 @@
       supportedDefaultLanguages: Array.isArray(value?.supportedDefaultLanguages)
         ? value.supportedDefaultLanguages
         : ["browser", "zh-CN", "en"],
+      bannerEnabled: Boolean(value?.bannerEnabled),
+      bannerLevel: value?.bannerLevel || "info",
+      bannerMessage: value?.bannerMessage || "",
+      bannerDismissible: value?.bannerDismissible !== false,
+      supportedBannerLevels: Array.isArray(value?.supportedBannerLevels)
+        ? value.supportedBannerLevels
+        : ["info", "success", "warning", "danger"],
+      productName: value?.productName || "",
+      productSubtitle: value?.productSubtitle || "",
+      logoText: value?.logoText || "",
+      logoUrl: value?.logoUrl || "",
+      faviconUrl: value?.faviconUrl || "",
       updatedAt: value?.updatedAt || null
     };
   }
@@ -584,14 +612,17 @@
   }
 
   async function saveDefaultLanguage(defaultLanguage) {
-    const normalized = normalizeDefaultLanguage(defaultLanguage);
+    return saveUiSettings({ defaultLanguage: normalizeDefaultLanguage(defaultLanguage) });
+  }
+
+  async function saveUiSettings(payload) {
     const response = await fetch("/internal/ui-settings", {
       method: "PUT",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ defaultLanguage: normalized }),
+      body: JSON.stringify(payload),
       cache: "no-store"
     });
     if (!response.ok) {
@@ -840,6 +871,7 @@
     loadSettings,
     ready: () => readyPromise,
     saveDefaultLanguage,
+    saveUiSettings,
     setDefaultLanguage,
     settings: () => settings,
     text: translate

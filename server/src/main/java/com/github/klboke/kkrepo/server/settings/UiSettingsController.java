@@ -4,9 +4,7 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.UiSettingsDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.UiSettingsRecord;
 import java.time.Instant;
 import java.util.List;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -21,27 +19,13 @@ public class UiSettingsController {
       UiSettingsDao.LANGUAGE_BROWSER,
       UiSettingsDao.LANGUAGE_ZH_CN,
       UiSettingsDao.LANGUAGE_EN);
+  private static final List<String> SUPPORTED_BANNER_LEVELS = List.of(
+      "info", "success", "warning", "danger");
 
   private final UiSettingsDao uiSettingsDao;
-  private final String productName;
-  private final String productSubtitle;
-  private final String logoText;
-  private final String logoUrl;
-  private final String faviconUrl;
 
-  public UiSettingsController(
-      UiSettingsDao uiSettingsDao,
-      @Value("${kkrepo.ui.product-name:kkrepo}") String productName,
-      @Value("${kkrepo.ui.product-subtitle:Repository Manager}") String productSubtitle,
-      @Value("${kkrepo.ui.logo-text:KL}") String logoText,
-      @Value("${kkrepo.ui.logo-url:}") String logoUrl,
-      @Value("${kkrepo.ui.favicon-url:}") String faviconUrl) {
+  public UiSettingsController(UiSettingsDao uiSettingsDao) {
     this.uiSettingsDao = uiSettingsDao;
-    this.productName = productName;
-    this.productSubtitle = productSubtitle;
-    this.logoText = logoText;
-    this.logoUrl = logoUrl;
-    this.faviconUrl = faviconUrl;
   }
 
   @GetMapping
@@ -51,13 +35,19 @@ public class UiSettingsController {
 
   @GetMapping("/branding")
   public BrandingView branding() {
-    return new BrandingView(productName, productSubtitle, logoText, logoUrl, faviconUrl);
+    UiSettingsRecord record = uiSettingsDao.read();
+    return new BrandingView(
+        record.productName(),
+        record.productSubtitle(),
+        record.logoText(),
+        record.logoUrl(),
+        record.faviconUrl());
   }
 
   @PutMapping
-  public UiSettingsView update(@RequestBody UiSettingsCommand command) {
+  public UiSettingsView update(@RequestBody UiSettingsDao.UiSettingsCommand command) {
     try {
-      return toView(uiSettingsDao.saveDefaultLanguage(command == null ? null : command.defaultLanguage()));
+      return toView(uiSettingsDao.save(command));
     } catch (IllegalArgumentException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
     }
@@ -67,15 +57,32 @@ public class UiSettingsController {
     return new UiSettingsView(
         record.defaultLanguage(),
         SUPPORTED_DEFAULT_LANGUAGES,
+        record.bannerEnabled(),
+        record.bannerLevel(),
+        record.bannerMessage(),
+        record.bannerDismissible(),
+        SUPPORTED_BANNER_LEVELS,
+        record.productName(),
+        record.productSubtitle(),
+        record.logoText(),
+        record.logoUrl(),
+        record.faviconUrl(),
         record.updatedAt());
-  }
-
-  public record UiSettingsCommand(String defaultLanguage) {
   }
 
   public record UiSettingsView(
       String defaultLanguage,
       List<String> supportedDefaultLanguages,
+      boolean bannerEnabled,
+      String bannerLevel,
+      String bannerMessage,
+      boolean bannerDismissible,
+      List<String> supportedBannerLevels,
+      String productName,
+      String productSubtitle,
+      String logoText,
+      String logoUrl,
+      String faviconUrl,
       Instant updatedAt) {
   }
 
