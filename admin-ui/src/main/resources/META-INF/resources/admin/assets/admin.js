@@ -1853,6 +1853,9 @@ async function deleteRepository(name) {
 // ---- Security ------------------------------------------------------------
 
 function listContainsFilter(values, filter) {
+  if (window.kkrepoAdminFilters?.matchesFilter) {
+    return window.kkrepoAdminFilters.matchesFilter(values, filter);
+  }
   if (!filter) return true;
   return values.map((value) => lowerOrEmpty(value)).join(" ").includes(filter);
 }
@@ -1911,7 +1914,8 @@ function securityRoleCandidates(excludedRoleId = "") {
     .map((role) => ({
       id: role.roleId,
       label: role.roleId,
-      meta: role.readOnly ? "read-only" : "role"
+      meta: role.readOnly ? "read-only" : "role",
+      filterValues: [role.roleId, role.name, role.description, role.readOnly ? "read-only" : "role"]
     }))
     .sort(compareTransferItems);
 }
@@ -1928,7 +1932,14 @@ function securityPrivilegeCandidates() {
     .map((privilege) => ({
       id: privilege.privilegeId,
       label: privilege.privilegeId,
-      meta: privilege.type || "privilege"
+      meta: privilege.type || "privilege",
+      filterValues: [
+        privilege.privilegeId,
+        privilege.type,
+        privilege.name,
+        privilege.description,
+        privilege.permission
+      ]
     }))
     .sort(compareTransferItems);
 }
@@ -1990,8 +2001,7 @@ function setSecurityTransferSelection(key, values) {
 }
 
 function transferItemMatchesFilter(item, filter) {
-  if (!filter) return true;
-  return `${item.label} ${item.meta || ""}`.toLowerCase().includes(filter);
+  return listContainsFilter(item.filterValues || [item.label, item.meta], filter);
 }
 
 function securityTransferRowHtml(config, item, side) {
