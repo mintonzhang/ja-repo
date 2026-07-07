@@ -16,6 +16,6 @@ server:
   port: 8080
 spring:
   datasource:
-    url: jdbc:mysql://10.2.80.13:9090/ja_repo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+    url: jdbc:mysql://10.2.80.13:3306/ja_repo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
     username: ja_repo
     password: JasolarRepo@2026
