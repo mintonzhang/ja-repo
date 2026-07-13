@@ -15,8 +15,8 @@ on:
           - cargo
           - client-e2e
           - full
-  schedule:
-    - cron: "0 19 * * *"
+  # schedule:
+   # - cron: "0 19 * * *"
   pull_request:
     branches:
       - main
